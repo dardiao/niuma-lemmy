@@ -26,13 +26,18 @@ services:
       LEMMY_DOMAIN: ${LEMMY_DOMAIN:?请在 .env 里设置 LEMMY_DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL:?请在 .env 里设置 ACME_EMAIL}
     healthcheck: !override
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/"]
+      # 用 Caddy 的管理接口判断存活：直接请求 :80 会拿到 301/308 跳转到 https，
+      # 容器内按域名握手会失败（SNI 是 127.0.0.1），所以健康检查不要走公网端口。
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 20s
 
   lemmy:
+    # 服务器内存小（≤2G）不能编译 Rust，镜像是在本地交叉编译成 amd64 后传上去的。
+    # 这里显式写 image 名，`up -d` 就会直接用传过去的镜像，不会试图重新构建。
+    image: docker-lemmy:latest
     environment:
       RUST_LOG: warn,extism=info,lemmy_server=info,lemmy_api=info,lemmy_apub=info
       # 生产默认开启对外联邦；设成 true 就变成只读的本地实例
@@ -42,10 +47,13 @@ services:
       - ./plugins:/plugins:Z
 
   lemmy-ui:
+    image: docker-lemmy-ui:latest
     environment:
       # 浏览器用正式域名访问（同源，走 caddy 转发），服务端渲染走 compose 网络
       LEMMY_UI_BACKEND: ${LEMMY_DOMAIN}
-      LEMMY_UI_BACKEND_INTERNAL: lemmy:8536
+      # 必须带 http:// —— LEMMY_UI_HTTPS=true 会让不带协议的地址默认变 https，
+      # 而容器之间是明文 HTTP，写成 lemmy:8536 会让服务端渲染去连 https://lemmy:8536 从而 500
+      LEMMY_UI_BACKEND_INTERNAL: http://lemmy:8536
       LEMMY_UI_FRONTEND: ${LEMMY_DOMAIN}
       LEMMY_UI_HTTPS: "true"
       LEMMY_UI_SECURITY_CONTACT: ${LEMMY_UI_SECURITY_CONTACT:-}

@@ -16,7 +16,40 @@
 | `../lemmy/docker/docker-compose.prod.yml` | 生产 override：caddy(80/443)、内部端口不外露 |
 | `../lemmy/docker/Caddyfile` | 自动 HTTPS + Lemmy 的路由规则 |
 
-## 前置条件
+## 本项目的实际部署方式（2026-09-20）
+
+服务器是 **2 核 / 1.9G 内存 / 无 swap 起（后加了 2G swap）**，装不下 Rust 编译，所以走
+**本地交叉编译 amd64 镜像 → docker save → scp → docker load** 这条路。服务器上只跑容器，
+永远不执行 `docker compose build`。
+
+服务器目录：`/opt/niuma/{lemmy,lemmy-ui,lemmy-deploy}`，root 登录，已装 Docker 29.8.1 +
+Compose 5.5.1，时区已设为 Asia/Shanghai，防火墙只放行 22/80/443。
+
+### 本地编译并上传（每次改完代码都这样更新）
+
+```bash
+# 1. 本地交叉编译（Apple Silicon 上走 Rosetta 模拟 amd64）
+cd ~/Desktop/projects/lemmy
+docker buildx build --platform linux/amd64 --load -t docker-lemmy:amd64 -f docker/Dockerfile .
+cd ~/Desktop/projects/lemmy-ui
+docker buildx build --platform linux/amd64 --load -t docker-lemmy-ui:amd64 -f dev.dockerfile .
+
+# 2. 打包传输（后端约 600M、前端约 830M）
+docker save docker-lemmy:amd64 docker-lemmy-ui:amd64 | gzip > /tmp/lemmy-images.tgz
+scp /tmp/lemmy-images.tgz root@mouth.niuma.club:/tmp/
+
+# 3. 服务器上导入并打上 compose 期望的标签
+ssh root@mouth.niuma.club 'gunzip -c /tmp/lemmy-images.tgz | docker load &&
+  docker tag docker-lemmy:amd64 docker-lemmy:latest &&
+  docker tag docker-lemmy-ui:amd64 docker-lemmy-ui:latest &&
+  cd /opt/niuma/lemmy/docker && docker compose --env-file ../../lemmy-deploy/.env \
+    -f docker-compose.yml -f docker-compose.prod.yml up -d'
+```
+
+> 本机需要 `docker-buildx` 插件（`brew install docker-buildx`，并软链到
+> `~/.docker/cli-plugins/docker-buildx`）。经典 builder **不支持**交叉编译，必须用 buildx。
+
+## 前置条件（首次部署）
 
 - VPS：建议 **2 核 4G 起**，磁盘 ≥ 40G（镜像 + 构建缓存 + 备份）。内存 ≤2G 时不要在服务器上编译 Rust，见下面"构建方式"。
 - 系统装了 Docker 与 compose **≥ 2.24**（`docker compose version` 确认，override 里用到 `!override`/`!reset`）。
@@ -31,11 +64,11 @@
 在本地执行（排除依赖、构建产物和数据目录）：
 
 ```bash
-rsync -av --delete \
-  --exclude node_modules --exclude dist --exclude target \
-  --exclude 'docker/volumes' --exclude backups \
+rsync -az --delete \
+  --exclude node_modules --exclude dist --exclude target --exclude .git \
+  --exclude volumes --exclude backups --exclude '.env' --exclude 'lemmy.prod.hjson' \
   ~/Desktop/projects/lemmy ~/Desktop/projects/lemmy-ui ~/Desktop/projects/lemmy-deploy \
-  user@VPS:~
+  root@mouth.niuma.club:/opt/niuma/
 ```
 
 ### 2. 准备配置

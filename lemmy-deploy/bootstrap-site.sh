@@ -89,8 +89,12 @@ api -X PUT "$BASE/api/v4/account/settings/save" -d "$USER_BODY" > /dev/null
 
 if [ -f "$ICON_FILE" ]; then
   echo "上传站点图标…"
-  api -X POST "$BASE/api/v4/site/icon" \
-    -H 'Content-Type: image/png' --data-binary "@$ICON_FILE" > /dev/null
+  # pict-rs 只接受 multipart（字段名 images[]），裸 body 会返回 400。
+  # 这里不能用上面的 api() 包装：它会带上 Content-Type: application/json，
+  # 覆盖掉 curl 生成的 multipart 边界，pictrs 会拒绝。
+  curl -fsS -X POST "$BASE/api/v4/site/icon" \
+    -H "Authorization: Bearer $JWT" \
+    -F "images[]=@$ICON_FILE" > /dev/null
 else
   echo "未找到图标文件 $ICON_FILE，跳过（可在后台「站点 → 图标」手工上传）"
 fi

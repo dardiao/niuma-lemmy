@@ -81,8 +81,19 @@ if curl -fsS -o /dev/null --max-time 15 \
 else
   bad "webfinger 打不开，联邦会失败"
 fi
-curl -fsS -o /dev/null --max-time 15 "$BASE/nodeinfo/2.0" &&
-  ok "nodeinfo 正常" || bad "nodeinfo 打不开"
+# nodeinfo 的实际地址由发现文档给出（这版是 /nodeinfo/2.1），不要写死版本号
+NODEINFO_URL="$(curl -fsS --max-time 15 "$BASE/.well-known/nodeinfo" 2>/dev/null |
+  python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+    print(d["links"][0]["href"])
+except Exception:
+    print("")' 2>/dev/null)"
+if [ -n "$NODEINFO_URL" ] && curl -fsS -o /dev/null --max-time 15 "$NODEINFO_URL"; then
+  ok "nodeinfo 正常（$NODEINFO_URL）"
+else
+  bad "nodeinfo 打不开或发现文档异常"
+fi
 
 echo
 if [ "$FAILED" = "0" ]; then
