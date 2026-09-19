@@ -1,7 +1,7 @@
 import { Component } from "inferno";
 import { NavLink } from "inferno-router";
 import { GetSiteResponse } from "lemmy-js-client";
-import { instanceLabel } from "@utils/config";
+import { instanceLabel, sourceCodeLabel, sourceCodeUrl } from "@utils/config";
 import { setIsoData } from "@utils/app";
 import { amAdmin } from "@utils/roles";
 import { I18NextService } from "../../services";
@@ -60,6 +60,17 @@ export class Footer extends Component<FooterProps, never> {
                 show the site name as plain text instead. */}
             <li className="nav-item">
               <span className="nav-link">{instanceLabel}</span>
+            </li>
+            {/* LOCAL: AGPL requires offering the source of this modified version. */}
+            <li className="nav-item">
+              <a
+                className="nav-link"
+                href={sourceCodeUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {sourceCodeLabel}
+              </a>
             </li>
           </ul>
         </div>

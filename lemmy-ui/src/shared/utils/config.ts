@@ -14,6 +14,9 @@ export const matrixUrl = "https://matrix.org/try-matrix/";
 export const instanceLabel = "niuma.club";
 export const copyLinkLabel = "复制链接";
 export const copiedLabel = "已复制";
+// AGPL 第 13 条要求向使用者提供本修改版的源码，页脚链接指向公开仓库。
+export const sourceCodeUrl = "https://github.com/dardiao/niuma-lemmy";
+export const sourceCodeLabel = "源代码";
 // Signup is tied to the operator's subdomain platform: a username is the prefix of a
 // registered `<prefix>.niuma.club`, verified through the proxy in the ui server.
 export const signupDomainSuffix = "niuma.club";
