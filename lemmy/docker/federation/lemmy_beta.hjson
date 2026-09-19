@@ -1,0 +1,16 @@
+{
+  hostname: lemmy-beta:8551
+  port: 8551
+  tls_enabled: false
+  setup: {
+    admin_username: lemmy_beta
+    admin_password: lemmylemmy
+    site_name: lemmy-beta
+  }
+  database: {
+    connection: "postgres://lemmy:password@postgres_beta:5432/lemmy"
+  }
+  pictrs: {
+    api_key: "my-pictrs-key"
+  }
+}

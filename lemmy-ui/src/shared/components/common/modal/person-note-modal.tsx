@@ -1,0 +1,140 @@
+import {
+  Component,
+  FormEvent,
+  InfernoNode,
+  RefObject,
+  createRef,
+} from "inferno";
+import { I18NextService } from "@services/I18NextService";
+import { Spinner } from "@components/common/icon";
+import type { Modal } from "bootstrap";
+import { NotePerson, PersonId } from "lemmy-js-client";
+import { modalMixin } from "@components/mixins/modal-mixin";
+import { randomStr } from "@utils/helpers";
+
+interface PersonNoteModalProps {
+  children?: InfernoNode;
+  note?: string;
+  personId: PersonId;
+  show: boolean;
+  loading: boolean;
+  onSubmit: (form: NotePerson) => void;
+  onCancel: () => void;
+}
+
+interface PersonNoteModalState {
+  note?: string;
+}
+
+@modalMixin
+export default class PersonNoteModal extends Component<
+  PersonNoteModalProps,
+  PersonNoteModalState
+> {
+  readonly modalDivRef: RefObject<HTMLDivElement>;
+  readonly yesButtonRef: RefObject<HTMLButtonElement>;
+  modal?: Modal;
+  state: PersonNoteModalState = {
+    note: this.props.note,
+  };
+
+  constructor(props: PersonNoteModalProps, context: object) {
+    super(props, context);
+
+    this.modalDivRef = createRef();
+    this.yesButtonRef = createRef();
+  }
+
+  render() {
+    const btnText = this.props.loading ? (
+      <Spinner />
+    ) : (
+      I18NextService.i18n.t("save")
+    );
+
+    const formId = `person-note-${randomStr()}`;
+
+    // Only disable the form if the initial props note is null.
+    // Otherwise you won't be able to remove notes
+    const disableForm = !this.props.note && !this.state.note;
+
+    return (
+      <div
+        className="modal fade"
+        id="personNoteModal"
+        tabIndex={-1}
+        aria-hidden
+        aria-labelledby="#personNoteModalTitle"
+        data-bs-backdrop="static"
+        ref={this.modalDivRef}
+      >
+        <div className="modal-dialog modal-fullscreen-sm-down">
+          <div className="modal-content">
+            <header className="modal-header">
+              <h5 className="modal-title" id="personNoteModalTitle">
+                {I18NextService.i18n.t("create_user_note")}
+              </h5>
+            </header>
+            <div className="modal-body text-center align-middle text-body">
+              <form
+                id={formId}
+                onSubmit={event => handleSubmit(this, event)}
+                className="mb-3"
+              >
+                <input
+                  type="text"
+                  className="form-control"
+                  placeholder={I18NextService.i18n.t("create_user_note")}
+                  value={this.state.note}
+                  onInput={event => handleNoteChange(this, event)}
+                />
+              </form>
+            </div>
+            <footer className="modal-footer">
+              <button
+                type="submit"
+                className="btn btn-light border-light-subtle me-3"
+                form={formId}
+                disabled={disableForm || this.props.loading}
+              >
+                {btnText}
+              </button>
+              <button
+                type="button"
+                className="btn btn-light"
+                onClick={this.props.onCancel}
+                disabled={this.props.loading}
+              >
+                {I18NextService.i18n.t("cancel")}
+              </button>
+            </footer>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  handleDismiss() {
+    this.props.onCancel();
+    this.modal?.hide();
+  }
+}
+
+function handleNoteChange(
+  i: PersonNoteModal,
+  event: FormEvent<HTMLInputElement>,
+) {
+  i.setState({ note: event.target.value });
+}
+
+function handleSubmit(i: PersonNoteModal, event: FormEvent<HTMLFormElement>) {
+  event.preventDefault();
+
+  // Empty string is a delete note
+  const note = i.state.note ?? "";
+
+  i.props.onSubmit({
+    note,
+    person_id: i.props.personId,
+  });
+}

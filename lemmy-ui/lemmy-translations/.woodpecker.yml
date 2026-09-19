@@ -1,0 +1,26 @@
+steps:
+  # Remove this for now.
+  # prettier_check:
+  #   image: tmknom/prettier:3.2.5
+  #   commands:
+  #     - prettier -c .
+  #   when:
+  #     - event: pull_request
+
+  notify_success:
+    image: alpine:3
+    commands:
+      - apk add curl
+      - "curl -H'Title: ✔️ ${CI_REPO_NAME}/${CI_COMMIT_SOURCE_BRANCH}' -d'${CI_PIPELINE_URL}' ntfy.sh/lemmy_drone_ci"
+    when:
+      - event: pull_request
+        status: [success]
+
+  notify_failure:
+    image: alpine:3
+    commands:
+      - apk add curl
+      - "curl -H'Title: ❌ ${CI_REPO_NAME}/${CI_COMMIT_SOURCE_BRANCH}' -d'${CI_PIPELINE_URL}' ntfy.sh/lemmy_drone_ci"
+    when:
+      - event: pull_request
+        status: [failure]

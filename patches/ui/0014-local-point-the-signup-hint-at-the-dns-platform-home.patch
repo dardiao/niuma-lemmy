@@ -1,0 +1,32 @@
+From 50178232d6fcbc442e5b767a68d024685d852529 Mon Sep 17 00:00:00 2001
+From: dardiao <xn--6s1a@outlook.com>
+Date: Sun, 20 Sep 2026 01:57:07 +0800
+Subject: [PATCH 14/14] local: point the signup hint at the dns platform home
+ page
+
+The hint linked to /domains/, which is only useful once you are signed in there; the operator
+prefers sending visitors to the home page first.
+---
+ src/shared/utils/config.ts | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/shared/utils/config.ts b/src/shared/utils/config.ts
+index aa13532f..88802a1b 100644
+--- a/src/shared/utils/config.ts
++++ b/src/shared/utils/config.ts
+@@ -24,10 +24,10 @@ export const domainCheckMessages = {
+   // Lemmy 用户名只允许字母、数字、下划线，长度 2~20；带连字符的子域名不能作为用户名。
+   invalid: "只能用字母、数字、下划线，长度 2~20（连字符不支持）",
+   unavailable: "暂时无法校验，提交后由管理员核对",
+-  // 未注册时的提示：中间那段是可点击的链接，直接跳到 HapDNS 的域名注册页。
++  // 未注册时的提示：中间那段是可点击的链接，直接跳到 HapDNS 首页。
+   unregistered: {
+     text: "这个子域名还没有注册，请先去 ",
+-    link: { text: "HapDNS", href: "https://hapdns.com/domains/" },
++    link: { text: "HapDNS", href: "https://hapdns.com/" },
+     tail: " 注册",
+   },
+ };
+-- 
+2.54.0
+

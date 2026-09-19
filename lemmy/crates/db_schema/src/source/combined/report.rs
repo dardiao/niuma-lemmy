@@ -1,0 +1,48 @@
+use chrono::{DateTime, Utc};
+#[cfg(feature = "full")]
+use i_love_jesus::CursorKeysModule;
+#[cfg(feature = "full")]
+use lemmy_db_schema_file::schema::report_combined;
+use lemmy_db_schema_file::{
+  PersonId,
+  newtypes::{
+    CommentId,
+    CommentReportId,
+    CommunityId,
+    CommunityReportId,
+    PostId,
+    PostReportId,
+    PrivateMessageId,
+    PrivateMessageReportId,
+    ReportCombinedId,
+  },
+};
+use serde::{Deserialize, Serialize};
+use serde_with::skip_serializing_none;
+
+#[skip_serializing_none]
+#[derive(PartialEq, Eq, Serialize, Deserialize, Debug, Clone)]
+#[cfg_attr(
+  feature = "full",
+  derive(Identifiable, Queryable, Selectable, CursorKeysModule)
+)]
+#[cfg_attr(feature = "full", diesel(table_name = report_combined))]
+#[cfg_attr(feature = "full", diesel(check_for_backend(diesel::pg::Pg)))]
+#[cfg_attr(feature = "full", cursor_keys_module(name = report_combined_keys))]
+/// A combined reports table.
+pub struct ReportCombined {
+  pub id: ReportCombinedId,
+  pub published_at: DateTime<Utc>,
+  pub post_report_id: Option<PostReportId>,
+  pub comment_report_id: Option<CommentReportId>,
+  pub private_message_report_id: Option<PrivateMessageReportId>,
+  pub community_report_id: Option<CommunityReportId>,
+  pub resolved: bool,
+  pub item_creator_id: Option<PersonId>,
+  pub report_creator_id: PersonId,
+  pub resolver_id: Option<PersonId>,
+  pub post_id: Option<PostId>,
+  pub comment_id: Option<CommentId>,
+  pub community_id: Option<CommunityId>,
+  pub private_message_id: Option<PrivateMessageId>,
+}

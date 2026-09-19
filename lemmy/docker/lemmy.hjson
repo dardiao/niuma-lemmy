@@ -1,0 +1,34 @@
+{
+  # for more info about the config, check out the documentation
+  # https://join-lemmy.org/docs/en/administration/configuration.html
+
+  # This is a minimal lemmy config for the dev / main branch. Do not use for a 
+  # release / stable version.
+
+  # 这个块只在空库首次启动时生效。用户名一旦建站就固定了：Lemmy 不支持改名，
+  # 因为用户名是账号 ActivityPub 身份（https://<host>/u/<name>）的一部分。
+  # 用户名也只能用拉丁字母、数字、下划线——中文名请放到"显示名"里。
+  #
+  # 正式部署建议把这块留空，首次启动用网页建站向导自己填（本文件会随源码公开，
+  # 写在这里的密码等于公开）。
+  setup: {
+    admin_username: "niuma"
+    # 本地开发用的占位密码，正式环境不要用
+    admin_password: "lemmylemmy"
+    site_name: "牛马俱乐部"
+  }
+  database: {
+    connection: "postgres://lemmy:password@postgres:5432/lemmy"
+  }
+
+  hostname: "localhost"
+  bind: "0.0.0.0"
+  port: 8536
+
+  pictrs: {
+    url: "http://pictrs:8080/"
+    api_key: "my-pictrs-key"
+  }
+
+  #opentelemetry_url: "http://otel:4137"
+}

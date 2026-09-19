@@ -1,0 +1,297 @@
+From 6263e720808abe45efd8bc4bc4700cfcdf803cac Mon Sep 17 00:00:00 2001
+From: dardiao <xn--6s1a@outlook.com>
+Date: Sun, 20 Sep 2026 01:41:29 +0800
+Subject: [PATCH 12/14] local: signup usernames are subdomains registered on
+ the dns platform
+
+The username field now shows a fixed, grey `.niuma.club` suffix and holds only the prefix;
+on blur the page verifies that the subdomain really exists on the operator's platform.
+
+The browser cannot call that platform directly (its CORS allowlist only covers its own pages),
+so a small same-origin proxy in the ui server does the lookup: /domain-check?name=<prefix>
+forwards to https://hapdns.com/api/v1/check. The name is validated against the actor-name
+charset before it is used, so the endpoint cannot be pointed at anything else.
+
+Only status "registered" is accepted. "unregistered" (including reserved prefixes, which the
+platform reports with a reason) and malformed names block the submit; a lookup failure only
+warns, because registration is reviewed by an admin anyway. Input is lower-cased and a pasted
+".niuma.club" suffix is stripped, and hyphens are refused up front since Lemmy usernames do not
+allow them even though DNS labels do.
+---
+ src/server/handlers/domain-check-handler.ts   |  40 ++++++
+ src/server/index.tsx                          |   3 +
+ .../components/home/authenticate/signup.tsx   | 130 ++++++++++++++++--
+ src/shared/utils/config.ts                    |  12 ++
+ 4 files changed, 172 insertions(+), 13 deletions(-)
+ create mode 100644 src/server/handlers/domain-check-handler.ts
+
+diff --git a/src/server/handlers/domain-check-handler.ts b/src/server/handlers/domain-check-handler.ts
+new file mode 100644
+index 00000000..e8c15202
+--- /dev/null
++++ b/src/server/handlers/domain-check-handler.ts
+@@ -0,0 +1,40 @@
++import type { Request, Response } from "express";
++
++// LOCAL: signup is tied to the operator's subdomain platform: a username is only accepted when
++// `<name>.niuma.club` has really been registered there. The browser cannot query that platform
++// directly (its CORS allowlist only covers its own pages), so this small same-origin proxy
++// does it server-side. The name is validated against the DNS label charset before it is put
++// into the upstream URL, so this cannot be used to reach anything else.
++const DOMAIN_SUFFIX = "niuma.club";
++const CHECK_URL = "https://hapdns.com/api/v1/check";
++const LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
++const UPSTREAM_TIMEOUT_MS = 5000;
++
++export default async (req: Request, res: Response) => {
++  const rawName = req.query.name;
++  const name = (typeof rawName === "string" ? rawName : "")
++    .trim()
++    .toLowerCase();
++
++  if (!LABEL_RE.test(name)) {
++    res.status(400).json({ status: "invalid", reason: "格式不合法" });
++    return;
++  }
++
++  const domain = `${name}.${DOMAIN_SUFFIX}`;
++  try {
++    const upstream = await fetch(
++      `${CHECK_URL}?domain=${encodeURIComponent(domain)}`,
++      { signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) },
++    );
++    if (!upstream.ok) {
++      res
++        .status(502)
++        .json({ status: "error", reason: `域名平台返回 ${upstream.status}` });
++      return;
++    }
++    res.json(await upstream.json());
++  } catch {
++    res.status(502).json({ status: "error", reason: "无法连接域名平台" });
++  }
++};
+diff --git a/src/server/index.tsx b/src/server/index.tsx
+index 7d20b053..99b4c663 100644
+--- a/src/server/index.tsx
++++ b/src/server/index.tsx
+@@ -13,6 +13,7 @@ import SecurityHandler from "./handlers/security-handler";
+ import ServiceWorkerHandler from "./handlers/service-worker-handler";
+ import ThemeHandler from "./handlers/theme-handler";
+ import ThemesListHandler from "./handlers/themes-list-handler";
++import DomainCheckHandler from "./handlers/domain-check-handler";
+ import { setCacheControl, setDefaultCsp } from "./middleware";
+ import CodeThemeHandler from "./handlers/code-theme-handler";
+ import EmbedHandler from "./handlers/embed-handler";
+@@ -31,6 +32,8 @@ import {
+ const server = express();
+ // LOCAL: don't advertise the server framework in every response.
+ server.disable("x-powered-by");
++// LOCAL: same-origin proxy the signup page uses to verify a subdomain is registered.
++server.get("/domain-check", DomainCheckHandler);
+ // Log requests, skipping static asset paths to avoid log noise
+ const logFormat =
+   process.env["NODE_ENV"] === "development" ? "dev" : "combined";
+diff --git a/src/shared/components/home/authenticate/signup.tsx b/src/shared/components/home/authenticate/signup.tsx
+index a91cd720..2381844f 100644
+--- a/src/shared/components/home/authenticate/signup.tsx
++++ b/src/shared/components/home/authenticate/signup.tsx
+@@ -8,7 +8,12 @@ import {
+   LoginResponse,
+   SiteView,
+ } from "lemmy-js-client";
+-import { validActorRegexPattern } from "@utils/config";
++import {
++  domainCheckMessages,
++  domainCheckPath,
++  signupDomainSuffix,
++  validActorRegexPattern,
++} from "@utils/config";
+ import { I18NextService } from "@services/I18NextService";
+ import { UserService } from "@services/UserService";
+ import {
+@@ -31,6 +36,12 @@ import { RegistrationLegalInfo } from "./registration-legal-info";
+ import { RegistrationCheckboxes } from "./registration-checkboxes";
+ import { removeLocalStorageMarkdown } from "@components/common/markdown-textarea";
+ 
++// LOCAL: result of the subdomain lookup for the username being typed.
++type DomainCheck = {
++  state: "checking" | "ok" | "bad" | "unavailable";
++  message?: string;
++};
++
+ interface State {
+   registerRes: RequestState<LoginResponse>;
+   captchaRes: RequestState<GetCaptchaResponse>;
+@@ -47,6 +58,7 @@ interface State {
+     stay_logged_in: boolean;
+   };
+   captchaPlaying: boolean;
++  domainCheck?: DomainCheck;
+ }
+ 
+ type SignupRouteProps = RouteComponentProps<Record<string, never>>;
+@@ -139,17 +151,26 @@ export class Signup extends Component<SignupRouteProps, State> {
+           </label>
+ 
+           <div className="col-sm-10">
+-            <input
+-              type="text"
+-              id="register-username"
+-              className="form-control"
+-              value={this.state.form.username}
+-              onInput={e => handleRegisterUsernameChange(this, e)}
+-              required
+-              minLength={2}
+-              pattern={validActorRegexPattern}
+-              title={I18NextService.i18n.t("community_reqs")}
+-            />
++            {/* LOCAL: the username is the prefix of a subdomain registered on the operator's
++                dns platform, so the suffix is fixed and shown next to the input. */}
++            <div className="input-group">
++              <input
++                type="text"
++                id="register-username"
++                className="form-control"
++                value={this.state.form.username}
++                onInput={e => handleRegisterUsernameChange(this, e)}
++                onBlur={() => checkSignupDomain(this)}
++                required
++                minLength={2}
++                pattern={validActorRegexPattern}
++                title={I18NextService.i18n.t("community_reqs")}
++              />
++              <span className="input-group-text text-body-secondary">
++                .{signupDomainSuffix}
++              </span>
++            </div>
++            {domainCheckHint(this)}
+           </div>
+         </div>
+ 
+@@ -317,6 +338,17 @@ async function handleRegisterSubmit(
+     stay_logged_in,
+   } = i.state.form;
+ 
++  // LOCAL: never submit a username whose subdomain is not registered on the dns platform.
++  if (username) {
++    if (!i.state.domainCheck || i.state.domainCheck.state === "checking") {
++      await checkSignupDomain(i);
++    }
++    if (i.state.domainCheck?.state === "bad") {
++      toast(i.state.domainCheck.message ?? "", "danger");
++      return;
++    }
++  }
++
+   // normal registration
+   if (username && password && password_verify) {
+     i.setState({ registerRes: LOADING_REQUEST });
+@@ -379,8 +411,80 @@ function handleRegisterUsernameChange(
+   i: Signup,
+   event: FormEvent<HTMLInputElement>,
+ ) {
+-  i.state.form.username = event.target.value.trim();
++  // LOCAL: the field only holds the subdomain prefix: strip a pasted suffix and normalise
++  // case, because DNS labels are lower case. Any change invalidates the previous check.
++  const suffix = `.${signupDomainSuffix}`;
++  let value: string = event.target.value.trim().toLowerCase();
++  if (value.endsWith(suffix)) {
++    value = value.slice(0, -suffix.length);
++  }
++  i.state.form.username = value;
++  i.state.domainCheck = undefined;
++  i.setState(i.state);
++}
++
++// LOCAL: ask the ui server (same origin, no CORS involved) whether the subdomain is registered
++// on the operator's dns platform. Only "registered" is accepted; everything else blocks the
++// signup, except a lookup failure, which only warns - the registration is reviewed by an admin
++// anyway.
++async function checkSignupDomain(i: Signup) {
++  const name = i.state.form.username?.trim().toLowerCase();
++  if (!name) {
++    i.state.domainCheck = { state: "ok" };
++    i.setState(i.state);
++    return;
++  }
++  // LOCAL: match Lemmy's own actor-name rule instead of the DNS label rule, so a name this
++  // check accepts is also a name the backend accepts.
++  if (!/^[a-z0-9_]{2,20}$/.test(name)) {
++    i.state.domainCheck = {
++      state: "bad",
++      message: domainCheckMessages.invalid,
++    };
++    i.setState(i.state);
++    return;
++  }
++
++  i.state.domainCheck = {
++    state: "checking",
++    message: domainCheckMessages.checking,
++  };
+   i.setState(i.state);
++
++  try {
++    const res = await fetch(
++      `${domainCheckPath}?name=${encodeURIComponent(name)}`,
++    );
++    const data = (await res.json()) as { status?: string; reason?: string };
++    if (data.status === "registered") {
++      i.state.domainCheck = { state: "ok", message: domainCheckMessages.ok };
++    } else {
++      i.state.domainCheck = {
++        state: "bad",
++        message: data.reason ?? domainCheckMessages.unregistered,
++      };
++    }
++  } catch {
++    i.state.domainCheck = {
++      state: "unavailable",
++      message: domainCheckMessages.unavailable,
++    };
++  }
++  i.setState(i.state);
++}
++
++function domainCheckHint(i: Signup) {
++  const check = i.state.domainCheck;
++  if (!check?.message) {
++    return undefined;
++  }
++  const cls =
++    check.state === "ok"
++      ? "text-success"
++      : check.state === "bad"
++        ? "text-danger"
++        : "text-warning";
++  return <div className={`form-text ${cls}`}>{check.message}</div>;
+ }
+ 
+ function handleRegisterEmailChange(
+diff --git a/src/shared/utils/config.ts b/src/shared/utils/config.ts
+index e556a1cd..a82a5b15 100644
+--- a/src/shared/utils/config.ts
++++ b/src/shared/utils/config.ts
+@@ -14,6 +14,18 @@ export const matrixUrl = "https://matrix.org/try-matrix/";
+ export const instanceLabel = "niuma.club";
+ export const copyLinkLabel = "复制链接";
+ export const copiedLabel = "已复制";
++// Signup is tied to the operator's subdomain platform: a username is the prefix of a
++// registered `<prefix>.niuma.club`, verified through the proxy in the ui server.
++export const signupDomainSuffix = "niuma.club";
++export const domainCheckPath = "/domain-check";
++export const domainCheckMessages = {
++  checking: "正在校验子域名…",
++  ok: "子域名已注册 ✅",
++  unregistered: "这个子域名还没有注册，请先去 HapDNS 注册",
++  // Lemmy 用户名只允许字母、数字、下划线，长度 2~20；带连字符的子域名不能作为用户名。
++  invalid: "只能用字母、数字、下划线，长度 2~20（连字符不支持）",
++  unavailable: "暂时无法校验，提交后由管理员核对",
++};
+ 
+ export const postRefetchSeconds: number = 60 * 1000;
+ export const mentionDropdownFetchLimit = 10;
+-- 
+2.54.0
+

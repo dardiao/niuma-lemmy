@@ -1,0 +1,30 @@
+From 9a33ca60180e3815d91ab5dca19a38c14458a2ff Mon Sep 17 00:00:00 2001
+From: dardiao <xn--6s1a@outlook.com>
+Date: Sat, 19 Sep 2026 10:37:29 +0800
+Subject: [PATCH 01/14] fix(docker): include pnpm-workspace.yaml in the UI
+ build context
+
+`pnpm i` reads `allowBuilds` from pnpm-workspace.yaml, so leaving that file
+out of the image means the native dependencies (sharp, @parcel/watcher,
+inferno) are never built and the dev image fails to compile. This looks like
+an upstream bug rather than a local preference, so it is worth a PR.
+---
+ dev.dockerfile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dev.dockerfile b/dev.dockerfile
+index 2f8783ae..6fe01800 100644
+--- a/dev.dockerfile
++++ b/dev.dockerfile
+@@ -13,7 +13,7 @@ ENV npm_config_target_platform=linux
+ ENV npm_config_target_libc=musl
+ 
+ # Cache deps
+-COPY package.json pnpm-lock.yaml ./
++COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+ RUN pnpm i --prefer-offline
+ 
+ # Build
+-- 
+2.54.0
+

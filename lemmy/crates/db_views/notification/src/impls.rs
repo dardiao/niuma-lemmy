@@ -1,0 +1,346 @@
+use crate::{CommentView, NotificationData, NotificationView, NotificationViewInternal};
+use diesel::{
+  BoolExpressionMethods,
+  ExpressionMethods,
+  PgExpressionMethods,
+  QueryDsl,
+  SelectableHelper,
+};
+use diesel_async::RunQueryDsl;
+use i_love_jesus::SortDirection;
+use lemmy_db_schema::{
+  NotificationTypeFilter,
+  source::{
+    notification::{Notification, notification_keys},
+    person::Person,
+  },
+  utils::{
+    limit_fetch,
+    queries::filters::{filter_blocked, filter_private_or_followed},
+  },
+};
+use lemmy_db_schema_file::{
+  PersonId,
+  enums::NotificationType,
+  newtypes::NotificationId,
+  schema::{comment, community, modlog, notification, person, post, private_message},
+};
+use lemmy_db_views_modlog::ModlogView;
+use lemmy_db_views_notification_sql::notification_joins;
+use lemmy_db_views_post::PostView;
+use lemmy_db_views_private_message::PrivateMessageView;
+use lemmy_diesel_utils::{
+  connection::{DbPool, get_conn},
+  pagination::{
+    CursorData,
+    PagedResponse,
+    PaginationCursor,
+    PaginationCursorConversion,
+    paginate_response,
+  },
+};
+use lemmy_utils::error::{LemmyErrorExt, LemmyErrorType, LemmyResult};
+
+impl NotificationView {
+  /// Gets the number of unread mentions
+  pub async fn get_unread_count(
+    pool: &mut DbPool<'_>,
+    my_person: &Person,
+    show_bot_accounts: bool,
+  ) -> LemmyResult<i64> {
+    use diesel::dsl::count;
+    let conn = &mut get_conn(pool).await?;
+
+    let unread_filter = notification::read.eq(false);
+
+    let mut query = notification_joins(my_person.id, my_person.instance_id)
+      // Filter for your user
+      .filter(notification::recipient_id.eq(my_person.id))
+      // Filter unreads
+      .filter(unread_filter)
+      .filter(filter_deleted_and_removed(my_person.id))
+      .filter(community::id.is_null().or(filter_private_or_followed()))
+      // Don't count replies from blocked users
+      .filter(filter_blocked())
+      .select(count(notification::id))
+      .into_boxed();
+
+    // These filters need to be kept in sync with the filters in queries().list()
+    if !show_bot_accounts {
+      query = query.filter(person::bot_account.is_distinct_from(true));
+    }
+
+    query
+      .first::<i64>(conn)
+      .await
+      .with_lemmy_type(LemmyErrorType::NotFound)
+  }
+
+  pub async fn read(
+    pool: &mut DbPool<'_>,
+    id: NotificationId,
+    my_person: &Person,
+  ) -> LemmyResult<Self> {
+    let conn = &mut get_conn(pool).await?;
+
+    let res = notification_joins(my_person.id, my_person.instance_id)
+      .filter(notification::id.eq(id))
+      .select(NotificationViewInternal::as_select())
+      .get_result::<NotificationViewInternal>(conn)
+      .await
+      .with_lemmy_type(LemmyErrorType::NotFound)?;
+    // TODO: should pass this in as param
+    let hide_modlog_names = true;
+    map_to_enum(res, hide_modlog_names, my_person).ok_or(LemmyErrorType::NotFound.into())
+  }
+}
+
+impl PaginationCursorConversion for NotificationView {
+  type PaginatedType = Notification;
+
+  fn to_cursor(&self) -> CursorData {
+    CursorData::new_id(self.notification.id.0)
+  }
+
+  async fn from_cursor(
+    cursor: CursorData,
+    pool: &mut DbPool<'_>,
+  ) -> LemmyResult<Self::PaginatedType> {
+    let conn = &mut get_conn(pool).await?;
+    let query = notification::table
+      .select(Self::PaginatedType::as_select())
+      .filter(notification::id.eq(cursor.id()?));
+    let token = query.first(conn).await?;
+
+    Ok(token)
+  }
+}
+
+#[derive(Default)]
+pub struct NotificationQuery {
+  pub type_: Option<NotificationTypeFilter>,
+  pub unread_only: Option<bool>,
+  pub show_bot_accounts: Option<bool>,
+  pub hide_modlog_names: Option<bool>,
+  pub creator_id: Option<PersonId>,
+  pub page_cursor: Option<PaginationCursor>,
+  pub limit: Option<i64>,
+  pub no_limit: Option<bool>,
+}
+
+impl NotificationQuery {
+  pub fn list(
+    self,
+    pool: &mut DbPool<'_>,
+    my_person: &Person,
+  ) -> impl Future<Output = LemmyResult<PagedResponse<NotificationView>>> {
+    Box::pin(async move {
+      let limit = limit_fetch(self.limit, self.no_limit)?;
+      let mut query = notification_joins(my_person.id, my_person.instance_id)
+        // Dont show replies from blocked users or instances
+        .filter(filter_blocked())
+        .filter(filter_deleted_and_removed(my_person.id))
+        .filter(community::id.is_null().or(filter_private_or_followed()))
+        .limit(limit)
+        .select(NotificationViewInternal::as_select())
+        .into_boxed();
+
+      // Filters
+      if self.unread_only.unwrap_or_default() {
+        query = query
+          // The recipient filter (IE only show replies to you)
+          .filter(notification::recipient_id.eq(my_person.id))
+          .filter(notification::read.eq(false));
+      } else if self.type_
+        == Some(NotificationTypeFilter::Other(
+          NotificationType::PrivateMessage,
+        ))
+      {
+        // A special case for private messages: show messages FROM you also.
+        // Use a not-null check to catch the others
+        query = query.filter(
+          notification::recipient_id.eq(my_person.id).or(
+            notification::private_message_id.is_not_null().and(
+              notification::recipient_id
+                .eq(my_person.id)
+                .or(person::id.eq(my_person.id)),
+            ),
+          ),
+        );
+      } else {
+        query = query.filter(notification::recipient_id.eq(my_person.id))
+      }
+
+      if let Some(type_) = self.type_ {
+        query = match type_ {
+          NotificationTypeFilter::All => query,
+          NotificationTypeFilter::Other(kind) => query.filter(notification::kind.eq(kind)),
+        }
+      }
+
+      // The creator_id filter
+      // For private messages, to create a conversation view, also include your own messages to them
+      if let Some(creator_id) = self.creator_id {
+        if self.type_
+          == Some(NotificationTypeFilter::Other(
+            NotificationType::PrivateMessage,
+          ))
+        {
+          query = query.filter(
+            // Them to me
+            notification::recipient_id
+              .eq(my_person.id)
+              .and(notification::creator_id.eq(creator_id))
+              // Me to them
+              .or(
+                notification::recipient_id
+                  .eq(creator_id)
+                  .and(notification::creator_id.eq(my_person.id)),
+              ),
+          );
+        } else {
+          query = query.filter(notification::creator_id.eq(creator_id));
+        }
+      }
+
+      if !self.show_bot_accounts.unwrap_or_default() {
+        query = query.filter(person::bot_account.is_distinct_from(true));
+      };
+
+      // Sorting by published
+      let paginated_query = Box::pin(NotificationView::paginate(
+        query,
+        &self.page_cursor,
+        SortDirection::Desc,
+        pool,
+      ))
+      .await?
+      .then_order_by(notification_keys::published_at)
+      // Tie breaker
+      .then_order_by(notification_keys::id);
+
+      let conn = &mut get_conn(pool).await?;
+      let res = paginated_query
+        .load::<NotificationViewInternal>(conn)
+        .await?;
+
+      let hide_modlog_names = self.hide_modlog_names.unwrap_or_default();
+
+      let res = res
+        .into_iter()
+        .filter_map(|r| map_to_enum(r, hide_modlog_names, my_person))
+        .collect();
+      paginate_response(res, limit, self.page_cursor)
+    })
+  }
+}
+
+fn map_to_enum(
+  v: NotificationViewInternal,
+  hide_modlog_name: bool,
+  my_person: &Person,
+) -> Option<NotificationView> {
+  let data = if let Some(modlog) = v.modlog {
+    let m = ModlogView {
+      modlog,
+      moderator: Some(v.creator),
+      target_person: Some(v.recipient),
+      target_community: v.community,
+      target_post: v.post,
+      target_comment: v.comment,
+      target_instance: v.instance,
+    };
+    let m = m.hide_mod_name(hide_modlog_name);
+    NotificationData::ModAction(m)
+  } else if let (Some(comment), Some(post), Some(community)) = (v.comment, &v.post, &v.community) {
+    NotificationData::Comment(CommentView {
+      comment,
+      post: post.clone(),
+      community: community.clone(),
+      creator: v.creator,
+      community_actions: v.community_actions,
+      person_actions: v.person_actions,
+      comment_actions: v.comment_actions,
+      tags: v.tags,
+      creator_banned_from_community: v.creator_banned_from_community,
+      creator_community_ban_expires_at: v.creator_community_ban_expires_at,
+      creator_is_admin: v.creator_is_admin,
+      can_mod: v.can_mod,
+      creator_banned: v.creator_banned,
+      creator_ban_expires_at: v.creator_ban_expires_at,
+      creator_is_moderator: v.creator_is_moderator,
+    })
+  } else if let (Some(post), Some(community)) = (v.post, v.community) {
+    NotificationData::Post(PostView {
+      post,
+      community,
+      creator: v.creator,
+      image_details: v.image_details,
+      community_actions: v.community_actions,
+      post_actions: v.post_actions,
+      person_actions: v.person_actions,
+      tags: v.tags,
+      creator_banned_from_community: v.creator_banned_from_community,
+      creator_community_ban_expires_at: v.creator_community_ban_expires_at,
+      creator_is_admin: v.creator_is_admin,
+      can_mod: v.can_mod,
+      creator_banned: v.creator_banned,
+      creator_ban_expires_at: v.creator_ban_expires_at,
+      creator_is_moderator: v.creator_is_moderator,
+    })
+  } else if let Some(mut private_message) = v.private_message {
+    private_message.clear_deleted_by_recipient(Some(my_person));
+    NotificationData::PrivateMessage(PrivateMessageView {
+      private_message,
+      creator: v.creator,
+      recipient: v.recipient,
+    })
+  } else {
+    return None;
+  };
+
+  let notification = if hide_modlog_name {
+    // Set the creator_id to zero if you're hiding modlog names.
+    // The mod view hiding is above.
+    Notification {
+      creator_id: PersonId(0),
+      ..v.notification
+    }
+  } else {
+    v.notification
+  };
+  Some(NotificationView { notification, data })
+}
+
+/// Filter out the deleted and removed items.
+#[diesel::dsl::auto_type]
+fn filter_deleted_and_removed(my_person_id: PersonId) -> _ {
+  // Use is_distinct_from since that handles null
+  comment::deleted
+    .is_distinct_from(true)
+    .and(
+      // Only hide removed if its not a modlog item
+      modlog::id
+        .is_not_null()
+        .or(comment::removed.is_distinct_from(true)),
+    )
+    .and(post::deleted.is_distinct_from(true))
+    .and(
+      modlog::id
+        .is_not_null()
+        .or(post::removed.is_distinct_from(true)),
+    )
+    // Filter out the deleted / removed
+    .and(private_message::deleted.is_distinct_from(true))
+    .and(
+      modlog::id
+        .is_not_null()
+        .or(private_message::removed.is_distinct_from(true)),
+    )
+    // Also hide messages deleted by the recipient, but only for them
+    .and(
+      private_message::deleted_by_recipient
+        .is_distinct_from(true)
+        .or(notification::recipient_id.ne(my_person_id)),
+    )
+}

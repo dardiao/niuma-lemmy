@@ -1,0 +1,68 @@
+import type { NextFunction, Request, Response } from "express";
+import { getJwtCookie } from "./utils/has-jwt-cookie";
+import { v4 as uuidv4 } from "uuid";
+
+export function setDefaultCsp({
+  res,
+  next,
+}: {
+  res: Response;
+  next: NextFunction;
+}) {
+  res.locals.cspNonce = uuidv4();
+
+  res.set(
+    "Content-Security-Policy",
+    `default-src 'self';
+     manifest-src *;
+     connect-src *;
+     img-src * data: blob:;
+     script-src 'self' 'nonce-${res.locals.cspNonce}';
+     style-src 'self' 'nonce-${res.locals.cspNonce}';
+     form-action 'self';
+     base-uri 'self';
+     frame-src *;
+     media-src * data:`.replace(/\s+/g, " "),
+  );
+
+  next();
+}
+
+// Set cache-control headers. If user is logged in, set `private` to prevent storing data in
+// shared caches (eg nginx) and leaking of private data. If user is not logged in, allow caching
+// all responses for 5 seconds to reduce load on backend and database. The specific cache
+// interval is rather arbitrary and could be set higher (less server load) or lower (fresher data).
+//
+// https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control
+export function setCacheControl(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  let caching: string;
+
+  // Only allow caching for success responses
+  if (res.statusCode >= 200 && res.statusCode < 400) {
+    if (req.path.startsWith("/static")) {
+      // Static files are immutable as they include a hash in the url. They can get cached for up to a year.
+      caching = "public, max-age=31556952 , immutable";
+    } else if (
+      req.path === "/manifest.webmanifest" ||
+      req.path === "/css/themelist"
+    ) {
+      // Cache these for a day
+      caching = "public, max-age=86400";
+    } else {
+      res.set("Vary", "Cookie, Accept, Accept-Language");
+      if (getJwtCookie(req.headers)) {
+        caching = "private";
+      } else {
+        caching = "public, max-age=60";
+      }
+    }
+
+    res.set("Cache-Control", caching);
+  }
+
+  next();
+}

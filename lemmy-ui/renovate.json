@@ -1,0 +1,8 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "schedule": ["* * 1 * *"],
+  "automerge": true,
+  "rebaseWhen": "conflicted",
+  "ignoreDeps": ["lemmy-js-client", "i18next"]
+}

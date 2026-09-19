@@ -1,0 +1,100 @@
+{
+  # settings related to the postgresql database
+  database: {
+    # Configure the database by specifying URI pointing to a postgres instance. This parameter can
+    # also be set by environment variable `LEMMY_DATABASE_URL`.
+    # 
+    # For an explanation of how to use connection URIs, see PostgreSQL's documentation:
+    # https://www.postgresql.org/docs/current/libpq-connect.html#id-1.7.3.8.3.6
+    connection: "postgres://lemmy:password@localhost:5432/lemmy"
+    # Maximum number of active sql connections
+    # 
+    # A high value here can result in errors "could not resize shared memory segment". In this case
+    # it is necessary to increase shared memory size in Docker: https://stackoverflow.com/a/56754077
+    pool_size: 30
+  }
+  # Pictrs image server configuration.
+  pictrs: {
+    # Address where pictrs is available (for image hosting)
+    url: "http://localhost:8080/"
+    # Set a custom pictrs API key. ( Required for deleting images )
+    api_key: "string"
+  }
+  # Email sending configuration. All options except login/password are mandatory
+  email: {
+    # https://docs.rs/lettre/0.11.14/lettre/transport/smtp/struct.AsyncSmtpTransport.html#method.from_url
+    connection: "smtps://user:pass@hostname:port"
+    # Address to send emails from, eg "noreply@your-instance.com"
+    smtp_from_address: "noreply@example.com"
+  }
+  # Parameters for automatic configuration of new instance (only used at first start)
+  setup: {
+    # Username for the admin user
+    admin_username: "admin"
+    # Password for the admin user. It must be between 10 and 60 characters.
+    admin_password: "tf6HHDS4RolWfFhk4Rq9"
+    # Name of the site, can be changed later. Maximum 20 characters. Only used if `admin_username`
+    # and `admin_password` are set.
+    site_name: "My Lemmy Instance"
+    # Email for the admin user (optional, can be omitted and set later through the website). Only
+    # used if `admin_username` and `admin_password` are set.
+    admin_email: "user@example.com"
+    # On first start Lemmy fetches the 50 most active communities from one of these instances,
+    # to provide some initial data. It tries the first list entry, and if it fails uses subsequent
+    # instances as fallback.
+    # Leave this empty to disable community bootstrap.
+    # TODO: remove voyager.lemmy.ml from defaults once Lemmy 1.0 is deployed to production
+    # instances.
+    bootstrap_instances: [
+      "string"
+      /* ... */
+    ]
+  }
+  # the domain name of your instance (mandatory)
+  hostname: "unset"
+  # Address where lemmy should listen for incoming requests
+  bind: "0.0.0.0"
+  # Port where lemmy should listen for incoming requests
+  port: 8536
+  # Whether the site is available over TLS. Needs to be true for federation to work.
+  tls_enabled: true
+  federation: {
+    # Limit to the number of concurrent outgoing federation requests per target instance.
+    # Set this to a higher value than 1 (e.g. 6) only if you have a huge instance (>10 activities
+    # per second) and if a receiving instance is not keeping up.
+    concurrent_sends_per_instance: 1
+  }
+  prometheus: {
+    bind: "127.0.0.1"
+    port: 10002
+  }
+  # Sets a response Access-Control-Allow-Origin CORS header. Can also be set via environment:
+  # `LEMMY_CORS_ORIGIN=example.org,site.com`
+  # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin
+  cors_origin: [
+    "lemmy.tld"
+    /* ... */
+  ]
+  # Print logs in JSON format. You can also disable ANSI colors in logs with env var `NO_COLOR`.
+  json_logging: false
+  # Data for loading Lemmy plugins
+  plugins: [
+    {
+      # Where to load the .wasm file from, can be a local file path or URL
+      file: "https://github.com/LemmyNet/lemmy-plugins/releases/download/0.1.1/go_replace_words.wasm"
+      # SHA256 hash of the .wasm file
+      hash: "37cdc01a3ff26eef578b668c6cc57fc06649deddb3a92cb6bae8e79b4e60fe12"
+      # Which websites the plugin may connect to
+      allowed_hosts: [
+        "lemmy.ml"
+        /* ... */
+      ]
+      # Configuration options for the plugin
+      config: {
+        string: "string"
+        /* ... */
+      }
+    }
+    /* ... */
+  ]
+}

@@ -1,0 +1,118 @@
+From 79cd6f7816d844914e26fed862203f384bd3c304 Mon Sep 17 00:00:00 2001
+From: dardiao <xn--6s1a@outlook.com>
+Date: Sat, 19 Sep 2026 11:52:35 +0800
+Subject: [PATCH 04/14] local: drop the remaining join-lemmy.org links
+
+- sort dropdowns: the "?" next to each sort control linked to the official sorting
+  documentation; removed
+- home: stop rendering the donation dialog, whose only button pointed at
+  join-lemmy.org/donate. It was dormant anyway - it only showed for logged-in users whose
+  last_donation_notification_at was over a year old, which is nobody on a fresh instance
+
+No rendered page contains a join-lemmy.org link after this.
+---
+ .../components/common/sort-dropdown.tsx       | 21 ++-----------------
+ src/shared/components/home/home.tsx           | 15 -------------
+ 2 files changed, 2 insertions(+), 34 deletions(-)
+
+diff --git a/src/shared/components/common/sort-dropdown.tsx b/src/shared/components/common/sort-dropdown.tsx
+index a9f04f06..b58bb76c 100644
+--- a/src/shared/components/common/sort-dropdown.tsx
++++ b/src/shared/components/common/sort-dropdown.tsx
+@@ -1,6 +1,3 @@
+-import { relTags, sortingHelpUrl } from "@utils/config";
+-import { I18NextService } from "../../services";
+-import { Icon } from "./icon";
+ import {
+   CommentSortType,
+   CommunitySortType,
+@@ -43,7 +40,6 @@ export function PostSortDropdown({
+         onSelect={onSelect}
+         className={className}
+       />
+-      <SortingHelp />
+     </div>
+   );
+ }
+@@ -70,7 +66,6 @@ export function CommentSortDropdown({
+         onSelect={onSelect}
+         className={className}
+       />
+-      <SortingHelp />
+     </div>
+   );
+ }
+@@ -107,7 +102,6 @@ export function CommunitiesSortDropdown({
+         onSelect={onSelect}
+         className={className}
+       />
+-      <SortingHelp />
+     </div>
+   );
+ }
+@@ -138,20 +132,9 @@ export function MultiCommunitiesSortDropdown({
+         onSelect={onSelect}
+         className={className}
+       />
+-      <SortingHelp />
+     </div>
+   );
+ }
+ 
+-function SortingHelp() {
+-  return (
+-    <a
+-      className="sort-select-icon text-muted ms-2"
+-      href={sortingHelpUrl}
+-      rel={relTags}
+-      title={I18NextService.i18n.t("sorting_help")}
+-    >
+-      <Icon icon="help-circle" classes="icon-inline" />
+-    </a>
+-  );
+-}
++// LOCAL: upstream renders a "?" next to each sort dropdown that links to the official
++// sorting documentation; removed so the UI carries no links to join-lemmy.org.
+diff --git a/src/shared/components/home/home.tsx b/src/shared/components/home/home.tsx
+index 47f8e5cb..37f9a532 100644
+--- a/src/shared/components/home/home.tsx
++++ b/src/shared/components/home/home.tsx
+@@ -113,7 +113,6 @@ import {
+ import { RouteComponentProps, RouterContext } from "inferno-router";
+ import { IRoutePropsWithFetch } from "@utils/routes";
+ import { isBrowser } from "@utils/browser";
+-import { DonationDialog } from "./donation-dialog";
+ import { nowBoolean } from "@utils/date";
+ import { BannedDialog } from "./banned-dialog";
+ import { PostListingModeDropdown } from "@components/common/post-listing-mode-dropdown";
+@@ -433,10 +432,6 @@ export class Home extends Component<HomeRouteProps, HomeState> {
+         {site_setup && (
+           <div className="row">
+             <div className="col-12 col-md-8 col-lg-9">
+-              <DonationDialog
+-                myUserInfo={myUserInfo}
+-                onHideDialog={() => handleHideDonationDialog(myUserInfo)}
+-              />
+               {myUserInfo?.local_user_view.banned && (
+                 <BannedDialog
+                   expires={myUserInfo?.local_user_view.ban_expires_at}
+@@ -1564,16 +1559,6 @@ async function handleMarkPageAsRead(i: Home, myUserInfo?: MyUserInfo) {
+   }
+ }
+ 
+-async function handleHideDonationDialog(myUserInfo?: MyUserInfo) {
+-  const res = await HttpService.client.markDonationDialogShown();
+-  if (res.state === "success") {
+-    if (myUserInfo !== undefined) {
+-      myUserInfo.local_user_view.local_user.last_donation_notification_at =
+-        new Date(0).toString();
+-    }
+-  }
+-}
+-
+ function handleHideSelectButtons(i: Home) {
+   i.setState({ selectButtonsHidden: !i.state.selectButtonsHidden });
+ }
+-- 
+2.54.0
+

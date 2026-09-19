@@ -1,0 +1,1136 @@
+use crate::ModlogView;
+use diesel::{
+  BoolExpressionMethods,
+  ExpressionMethods,
+  JoinOnDsl,
+  NullableExpressionMethods,
+  QueryDsl,
+  SelectableHelper,
+};
+use diesel_async::RunQueryDsl;
+use i_love_jesus::SortDirection;
+use lemmy_db_schema::{
+  ModlogKindFilter,
+  impls::local_user::LocalUserOptionHelper,
+  source::{
+    local_site::LocalSite,
+    local_user::LocalUser,
+    modlog::{Modlog, modlog_keys as key},
+    multi_community::MultiCommunityEntry,
+  },
+  utils::{limit_fetch, queries::filters::filter_is_subscribed},
+};
+use lemmy_db_schema_file::{
+  PersonId,
+  aliases,
+  enums::{CommunityFollowerState, CommunityVisibility, ListingType},
+  newtypes::{CommentId, CommunityId, ModlogId, PostId},
+  schema::{comment, community, community_actions, instance, modlog, person, post},
+};
+use lemmy_diesel_utils::{
+  connection::{DbPool, get_conn},
+  pagination::{
+    CursorData,
+    PagedResponse,
+    PaginationCursor,
+    PaginationCursorConversion,
+    paginate_response,
+  },
+};
+use lemmy_utils::error::LemmyResult;
+
+impl ModlogView {
+  #[diesel::dsl::auto_type(no_type_alias)]
+  fn joins(my_person_id: Option<PersonId>) -> _ {
+    // The query for the admin / mod person
+    let moderator_join = person::table.on(modlog::mod_id.eq(person::id));
+
+    // The modded / other person
+    let target_person = aliases::person1.field(person::id).nullable();
+    let target_person_join = aliases::person1.on(modlog::target_person_id.eq(target_person));
+
+    let community_actions_join = community_actions::table.on(
+      community_actions::community_id
+        .eq(community::id)
+        .and(community_actions::person_id.nullable().eq(my_person_id)),
+    );
+
+    modlog::table
+      .inner_join(moderator_join)
+      .left_join(target_person_join)
+      .left_join(comment::table)
+      .left_join(post::table)
+      .left_join(community::table)
+      .left_join(instance::table)
+      .left_join(community_actions_join)
+  }
+}
+
+impl PaginationCursorConversion for ModlogView {
+  type PaginatedType = Modlog;
+  fn to_cursor(&self) -> CursorData {
+    CursorData::new_id(self.modlog.id.0)
+  }
+
+  async fn from_cursor(
+    cursor: CursorData,
+    pool: &mut DbPool<'_>,
+  ) -> LemmyResult<Self::PaginatedType> {
+    let conn = &mut get_conn(pool).await?;
+    let query = modlog::table
+      .select(Self::PaginatedType::as_select())
+      .filter(modlog::id.eq(cursor.id()?));
+    let token = query.first(conn).await?;
+
+    Ok(token)
+  }
+}
+
+#[derive(Default)]
+/// Querying / filtering the modlog.
+pub struct ModlogQuery<'a> {
+  pub type_: Option<ModlogKindFilter>,
+  pub listing_type: Option<ListingType>,
+  pub comment_id: Option<CommentId>,
+  pub post_id: Option<PostId>,
+  pub community_id: Option<CommunityId>,
+  pub hide_modlog_names: Option<bool>,
+  pub local_user: Option<&'a LocalUser>,
+  pub mod_person_id: Option<PersonId>,
+  pub target_person_id: Option<PersonId>,
+  pub show_bulk: Option<bool>,
+  pub bulk_action_parent_id: Option<ModlogId>,
+  pub page_cursor: Option<PaginationCursor>,
+  pub limit: Option<i64>,
+}
+
+impl ModlogQuery<'_> {
+  pub async fn list(
+    self,
+    pool: &mut DbPool<'_>,
+    local_site: &LocalSite,
+  ) -> LemmyResult<PagedResponse<ModlogView>> {
+    let limit = limit_fetch(self.limit, None)?;
+
+    let target_person = aliases::person1.field(person::id);
+    let my_person_id = self.local_user.person_id();
+
+    let mut query = ModlogView::joins(my_person_id)
+      .select(ModlogView::as_select())
+      .limit(limit)
+      .into_boxed();
+
+    if let Some(mod_person_id) = self.mod_person_id {
+      query = query.filter(person::id.eq(mod_person_id));
+    };
+
+    if let Some(target_person_id) = self.target_person_id {
+      query = query.filter(target_person.eq(target_person_id));
+    };
+
+    if let Some(community_id) = self.community_id {
+      query = query.filter(community::id.eq(community_id))
+    }
+
+    if let Some(post_id) = self.post_id {
+      query = query.filter(post::id.eq(post_id))
+    }
+
+    if let Some(comment_id) = self.comment_id {
+      query = query.filter(comment::id.eq(comment_id))
+    }
+
+    // `show_bulk`: true => show all entries; false/None => hide bulk child entries.
+    // When bulk_action_parent_id is provided the caller is looking into a bulk
+    // action, so skip null guard
+    if let Some(bulk_action_parent_id) = self.bulk_action_parent_id {
+      query = query.filter(modlog::bulk_action_parent_id.eq(bulk_action_parent_id))
+    } else if !self.show_bulk.unwrap_or_default() {
+      query = query.filter(modlog::bulk_action_parent_id.is_null())
+    }
+
+    if let Some(type_) = self.type_ {
+      query = match type_ {
+        ModlogKindFilter::All => query,
+        ModlogKindFilter::Other(kind) => query.filter(modlog::kind.eq(kind)),
+      };
+    }
+
+    if !self.local_user.is_admin() {
+      query = query.filter(
+        community::id.is_null().or(
+          community::visibility
+            .ne(CommunityVisibility::Private)
+            .or(community_actions::follow_state.eq(CommunityFollowerState::Accepted)),
+        ),
+      );
+    }
+
+    query = match self.listing_type.unwrap_or(ListingType::All) {
+      ListingType::All => query,
+      ListingType::Subscribed => query.filter(filter_is_subscribed()),
+      ListingType::Local => query.filter(community::local.eq(true)),
+      ListingType::ModeratorView => {
+        query.filter(community_actions::became_moderator_at.is_not_null())
+      }
+      ListingType::Suggested => {
+        // Pre-fetch the suggested community ids, since the join is too costly
+        let community_ids =
+          if let Some(suggested_multi_id) = local_site.suggested_multi_community_id {
+            MultiCommunityEntry::list_community_ids(pool, suggested_multi_id).await?
+          } else {
+            vec![]
+          };
+
+        query.filter(modlog::target_community_id.eq_any(community_ids))
+      }
+    };
+
+    // Sorting by published
+    let paginated_query = ModlogView::paginate(query, &self.page_cursor, SortDirection::Desc, pool)
+      .await?
+      .then_order_by(key::published_at)
+      // Tie breaker
+      .then_order_by(key::id);
+
+    let conn = &mut get_conn(pool).await?;
+    let res = paginated_query.load::<ModlogView>(conn).await?;
+
+    let hide_modlog_names = self.hide_modlog_names.unwrap_or_default();
+
+    // Map the query results to the enum
+    let out = res
+      .into_iter()
+      .map(|u| u.hide_mod_name(hide_modlog_names))
+      .collect();
+
+    paginate_response(out, limit, self.page_cursor)
+  }
+}
+
+impl ModlogView {
+  /// Hides modlog names by setting the moderator to None.
+  pub fn hide_mod_name(self, hide_modlog_names: bool) -> Self {
+    if hide_modlog_names {
+      Self {
+        moderator: None,
+        ..self
+      }
+    } else {
+      self
+    }
+  }
+}
+
+#[cfg(test)]
+#[expect(clippy::indexing_slicing)]
+mod tests {
+  use super::*;
+  use lemmy_db_schema::source::{
+    comment::{Comment, CommentInsertForm},
+    community::{Community, CommunityInsertForm},
+    instance::Instance,
+    local_site::LocalSiteInsertForm,
+    modlog::{Modlog, ModlogInsertForm},
+    person::{Person, PersonInsertForm},
+    post::{Post, PostInsertForm},
+    site::{Site, SiteInsertForm},
+  };
+  use lemmy_db_schema_file::enums::ModlogKind;
+  use lemmy_diesel_utils::{
+    connection::{DbPool, build_db_pool_for_tests},
+    traits::Crud,
+  };
+  use lemmy_utils::error::LemmyResult;
+  use pretty_assertions::assert_eq;
+  use serial_test::serial;
+
+  struct Data {
+    instance: Instance,
+    timmy: Person,
+    sara: Person,
+    jessica: Person,
+    community: Community,
+    community_2: Community,
+    post: Post,
+    post_2: Post,
+    comment: Comment,
+    comment_2: Comment,
+    local_site: LocalSite,
+  }
+
+  async fn init_data(pool: &mut DbPool<'_>) -> LemmyResult<Data> {
+    let instance = Instance::read_or_create(pool, "my_domain.tld").await?;
+    let site_form = SiteInsertForm::new("test site".to_string(), instance.id);
+    let site = Site::create(pool, &site_form).await?;
+    let system_acct =
+      Person::create(pool, &PersonInsertForm::test_form(instance.id, "langs")).await?;
+    let local_site_form = LocalSiteInsertForm::new(site.id, system_acct.id);
+    let local_site = LocalSite::create(pool, &local_site_form).await?;
+
+    let timmy_form = PersonInsertForm::test_form(instance.id, "timmy_rcv");
+    let timmy = Person::create(pool, &timmy_form).await?;
+
+    let sara_form = PersonInsertForm::test_form(instance.id, "sara_rcv");
+    let sara = Person::create(pool, &sara_form).await?;
+
+    let jessica_form = PersonInsertForm::test_form(instance.id, "jessica_mrv");
+    let jessica = Person::create(pool, &jessica_form).await?;
+
+    let community_form = CommunityInsertForm::new(
+      instance.id,
+      "test community crv".to_string(),
+      "pubkey".to_string(),
+    );
+    let community = Community::create(pool, &community_form).await?;
+
+    let community_form_2 = CommunityInsertForm::new(
+      instance.id,
+      "test community crv 2".to_string(),
+      "pubkey".to_string(),
+    );
+    let community_2 = Community::create(pool, &community_form_2).await?;
+
+    let post_form = PostInsertForm::new("A test post crv".into(), timmy.id, community.id);
+    let post = Post::create(pool, &post_form).await?;
+
+    let new_post_2 = PostInsertForm::new("A test post crv 2".into(), sara.id, community_2.id);
+    let post_2 = Post::create(pool, &new_post_2).await?;
+
+    // Timmy creates a comment
+    let comment_form =
+      CommentInsertForm::new(timmy.id, post.id, community.id, "A test comment rv".into());
+    let comment = Comment::create(pool, &comment_form, None).await?;
+
+    // jessica creates a comment
+    let comment_form_2 = CommentInsertForm::new(
+      jessica.id,
+      post_2.id,
+      community_2.id,
+      "A test comment rv 2".into(),
+    );
+    let comment_2 = Comment::create(pool, &comment_form_2, None).await?;
+
+    Ok(Data {
+      instance,
+      local_site,
+      timmy,
+      sara,
+      jessica,
+      community,
+      community_2,
+      post,
+      post_2,
+      comment,
+      comment_2,
+    })
+  }
+
+  async fn cleanup(data: Data, pool: &mut DbPool<'_>) -> LemmyResult<()> {
+    Instance::delete(pool, data.instance.id).await?;
+
+    Ok(())
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn admin_types() -> LemmyResult<()> {
+    let pool = &build_db_pool_for_tests();
+    let pool = &mut pool.into();
+    let data = init_data(pool).await?;
+
+    let form =
+      ModlogInsertForm::admin_allow_instance(data.timmy.id, data.instance.id, true, "reason");
+    Modlog::create(pool, &[form]).await?;
+
+    let form =
+      ModlogInsertForm::admin_block_instance(data.timmy.id, data.instance.id, true, "reason");
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::admin_purge_comment(
+      data.timmy.id,
+      &data.comment,
+      data.community.id,
+      "reason",
+    );
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::admin_purge_community(data.timmy.id, "reason");
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::admin_purge_person(data.timmy.id, "reason");
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::admin_purge_post(data.timmy.id, data.community.id, "reason");
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::mod_change_community_visibility(data.timmy.id, data.community.id);
+    Modlog::create(pool, &[form]).await?;
+
+    // A 2nd mod hide community, but to a different community, and with jessica
+    let form =
+      ModlogInsertForm::mod_change_community_visibility(data.jessica.id, data.community_2.id);
+    Modlog::create(pool, &[form]).await?;
+
+    let modlog = ModlogQuery::default()
+      .list(pool, &data.local_site)
+      .await?
+      .items;
+    assert_eq!(8, modlog.len());
+
+    let v = &modlog[0];
+    assert_eq!(ModlogKind::ModChangeCommunityVisibility, v.modlog.kind);
+    assert_eq!(
+      Some(data.community_2.id),
+      v.target_community.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.jessica.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[1];
+    assert_eq!(ModlogKind::ModChangeCommunityVisibility, v.modlog.kind);
+    assert_eq!(
+      Some(data.community.id),
+      v.target_community.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[2];
+    assert_eq!(ModlogKind::AdminPurgePost, v.modlog.kind);
+    assert_eq!(
+      Some(data.community.id),
+      v.target_community.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[3];
+    assert_eq!(ModlogKind::AdminPurgePerson, v.modlog.kind);
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[4];
+    assert_eq!(ModlogKind::AdminPurgeCommunity, v.modlog.kind);
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[5];
+    assert_eq!(ModlogKind::AdminPurgeComment, v.modlog.kind);
+    assert_eq!(Some(data.post.id), v.target_post.as_ref().map(|a| a.id));
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    // Make sure the report types are correct
+    let v = &modlog[6]; // TODO: why index 2 again?
+    assert_eq!(ModlogKind::AdminBlockInstance, v.modlog.kind);
+    assert_eq!(
+      Some(data.instance.id),
+      v.target_instance.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[7];
+    assert_eq!(ModlogKind::AdminAllowInstance, v.modlog.kind);
+    assert_eq!(
+      Some(data.instance.id),
+      v.target_instance.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    // Filter by admin
+    let modlog_admin_filter = ModlogQuery {
+      mod_person_id: Some(data.timmy.id),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?;
+    // Only one is jessica
+    assert_eq!(7, modlog_admin_filter.len());
+
+    // Filter by community
+    let modlog_community_filter = ModlogQuery {
+      community_id: Some(data.community.id),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?;
+
+    // Should be 2, and not jessicas
+    assert_eq!(3, modlog_community_filter.len());
+
+    // Filter by type
+    let modlog_type_filter = ModlogQuery {
+      type_: Some(ModlogKindFilter::Other(
+        ModlogKind::ModChangeCommunityVisibility,
+      )),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?;
+
+    // 2 of these, one is jessicas
+    assert_eq!(2, modlog_type_filter.len());
+
+    let v = &modlog[0];
+    assert_eq!(ModlogKind::ModChangeCommunityVisibility, v.modlog.kind);
+    assert_eq!(
+      Some(data.community_2.id),
+      v.target_community.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.jessica.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[1];
+    assert_eq!(ModlogKind::ModChangeCommunityVisibility, v.modlog.kind);
+    assert_eq!(
+      Some(data.community.id),
+      v.target_community.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    cleanup(data, pool).await?;
+
+    Ok(())
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn mod_types() -> LemmyResult<()> {
+    let pool = &build_db_pool_for_tests();
+    let pool = &mut pool.into();
+    let data = init_data(pool).await?;
+
+    let form = ModlogInsertForm::admin_add(&data.timmy, data.jessica.id, false);
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::mod_add_to_community(
+      data.timmy.id,
+      data.community.id,
+      data.jessica.id,
+      false,
+    );
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::admin_ban(&data.timmy, data.jessica.id, true, None, "reason");
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::mod_ban_from_community(
+      data.timmy.id,
+      data.community.id,
+      data.jessica.id,
+      true,
+      None,
+      "reason",
+    );
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::mod_feature_post_community(data.timmy.id, &data.post, true);
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::admin_feature_post_site(&data.timmy, &data.post, true);
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::mod_lock_post(data.timmy.id, &data.post, true, "reason");
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::mod_lock_comment(
+      data.timmy.id,
+      &data.comment,
+      data.community.id,
+      true,
+      "reason",
+    );
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::mod_remove_comment(
+      data.timmy.id,
+      &data.comment,
+      data.community.id,
+      true,
+      "reason",
+      None,
+    );
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::admin_remove_community(
+      &data.timmy,
+      data.community.id,
+      None,
+      true,
+      "reason",
+    );
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::mod_remove_post(data.timmy.id, &data.post, true, "reason", None);
+    Modlog::create(pool, &[form]).await?;
+
+    let form =
+      ModlogInsertForm::mod_transfer_community(data.timmy.id, data.community.id, data.jessica.id);
+    Modlog::create(pool, &[form]).await?;
+
+    // A few extra ones to test different filters
+    let form =
+      ModlogInsertForm::mod_transfer_community(data.jessica.id, data.community_2.id, data.sara.id);
+    Modlog::create(pool, &[form]).await?;
+
+    let form =
+      ModlogInsertForm::mod_remove_post(data.jessica.id, &data.post_2, true, "reason", None);
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::mod_remove_comment(
+      data.jessica.id,
+      &data.comment_2,
+      data.community_2.id,
+      true,
+      "reason",
+      None,
+    );
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::mod_create_comment_warning(
+      data.jessica.id,
+      &data.comment,
+      data.community.id,
+      "reason",
+    );
+    Modlog::create(pool, &[form]).await?;
+
+    let form = ModlogInsertForm::mod_create_post_warning(data.jessica.id, &data.post_2, "reason");
+    Modlog::create(pool, &[form]).await?;
+
+    // The all view
+    let modlog = ModlogQuery::default().list(pool, &data.local_site).await?;
+    assert_eq!(17, modlog.len());
+
+    let v = &modlog[0];
+    assert_eq!(ModlogKind::ModWarnPost, v.modlog.kind);
+    assert_eq!(Some(data.post_2.id), v.target_post.as_ref().map(|a| a.id));
+    assert_eq!(
+      Some(data.post_2.community_id),
+      v.target_community.as_ref().map(|a| a.id)
+    );
+    assert_eq!(
+      Some(data.post_2.creator_id),
+      v.target_person.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.jessica.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[1];
+    assert_eq!(ModlogKind::ModWarnComment, v.modlog.kind);
+    assert_eq!(
+      Some(data.comment.id),
+      v.target_comment.as_ref().map(|a| a.id)
+    );
+    assert_eq!(
+      Some(data.comment.creator_id),
+      v.target_person.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.jessica.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[2];
+    assert_eq!(ModlogKind::ModRemoveComment, v.modlog.kind);
+    assert_eq!(
+      Some(data.comment_2.id),
+      v.target_comment.as_ref().map(|a| a.id)
+    );
+    assert_eq!(
+      Some(data.jessica.id),
+      v.target_person.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.jessica.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[3];
+    assert_eq!(ModlogKind::ModRemovePost, v.modlog.kind);
+    assert_eq!(Some(data.post_2.id), v.target_post.as_ref().map(|a| a.id));
+    assert_eq!(Some(data.sara.id), v.target_person.as_ref().map(|a| a.id));
+    assert_eq!(
+      Some(data.community_2.id),
+      v.target_community.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.jessica.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[4];
+    assert_eq!(ModlogKind::ModTransferCommunity, v.modlog.kind);
+    assert_eq!(
+      Some(data.community_2.id),
+      v.target_community.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.sara.id), v.target_person.as_ref().map(|a| a.id));
+    assert_eq!(Some(data.jessica.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[5];
+    assert_eq!(ModlogKind::ModTransferCommunity, v.modlog.kind);
+    assert_eq!(
+      Some(data.community.id),
+      v.target_community.as_ref().map(|a| a.id)
+    );
+    assert_eq!(
+      Some(data.jessica.id),
+      v.target_person.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[6];
+    assert_eq!(ModlogKind::ModRemovePost, v.modlog.kind);
+    assert_eq!(Some(data.post.id), v.target_post.as_ref().map(|a| a.id));
+    assert_eq!(Some(data.timmy.id), v.target_person.as_ref().map(|a| a.id));
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[7];
+    assert_eq!(ModlogKind::AdminRemoveCommunity, v.modlog.kind);
+    assert_eq!(
+      Some(data.community.id),
+      v.target_community.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[8];
+    assert_eq!(ModlogKind::ModRemoveComment, v.modlog.kind);
+    assert_eq!(
+      Some(data.comment.id),
+      v.target_comment.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.post.id), v.target_post.as_ref().map(|a| a.id));
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+    assert_eq!(
+      Some(data.community.id),
+      v.target_community.as_ref().map(|a| a.id)
+    );
+
+    let v = &modlog[9];
+    assert_eq!(ModlogKind::ModLockComment, v.modlog.kind);
+    assert_eq!(
+      Some(data.comment.id),
+      v.target_comment.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[10];
+    assert_eq!(ModlogKind::ModLockPost, v.modlog.kind);
+    assert_eq!(Some(data.post.id), v.target_post.as_ref().map(|a| a.id));
+    assert_eq!(
+      Some(data.community.id),
+      v.target_community.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[11];
+    assert_eq!(ModlogKind::AdminFeaturePostSite, v.modlog.kind);
+    assert_eq!(Some(data.post.id), v.target_post.as_ref().map(|a| a.id));
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[12];
+    assert_eq!(ModlogKind::ModFeaturePostCommunity, v.modlog.kind);
+    assert_eq!(Some(data.post.id), v.target_post.as_ref().map(|a| a.id));
+    assert_eq!(
+      Some(data.community.id),
+      v.target_community.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[13];
+    assert_eq!(ModlogKind::ModBanFromCommunity, v.modlog.kind);
+    assert_eq!(
+      Some(data.jessica.id),
+      v.target_person.as_ref().map(|a| a.id)
+    );
+    assert_eq!(
+      Some(data.community.id),
+      v.target_community.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[14];
+    assert_eq!(ModlogKind::AdminBan, v.modlog.kind);
+    assert_eq!(
+      Some(data.jessica.id),
+      v.target_person.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[15];
+    assert_eq!(ModlogKind::ModAddToCommunity, v.modlog.kind);
+    assert_eq!(
+      Some(data.jessica.id),
+      v.target_person.as_ref().map(|a| a.id)
+    );
+    assert_eq!(
+      Some(data.community.id),
+      v.target_community.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    let v = &modlog[16];
+    assert_eq!(ModlogKind::AdminAdd, v.modlog.kind);
+    assert_eq!(
+      Some(data.jessica.id),
+      v.target_person.as_ref().map(|a| a.id)
+    );
+    assert_eq!(Some(data.timmy.id), v.moderator.as_ref().map(|a| a.id));
+
+    // Filter by moderator
+    let modlog_mod_timmy_filter = ModlogQuery {
+      mod_person_id: Some(data.timmy.id),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?;
+    assert_eq!(12, modlog_mod_timmy_filter.len());
+
+    let modlog_mod_jessica_filter = ModlogQuery {
+      mod_person_id: Some(data.jessica.id),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?;
+    assert_eq!(5, modlog_mod_jessica_filter.len());
+
+    // Filter by target_person
+    // Gets a little complicated because things aren't directly linked,
+    // you have to go into the item to see who created it.
+
+    let modlog_modded_timmy_filter = ModlogQuery {
+      target_person_id: Some(data.timmy.id),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?;
+    assert_eq!(5, modlog_modded_timmy_filter.len());
+
+    let modlog_modded_jessica_filter = ModlogQuery {
+      target_person_id: Some(data.jessica.id),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?;
+    assert_eq!(6, modlog_modded_jessica_filter.len());
+
+    let modlog_modded_sara_filter = ModlogQuery {
+      target_person_id: Some(data.sara.id),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?;
+    assert_eq!(3, modlog_modded_sara_filter.len());
+
+    // Filter by community
+    let modlog_community_filter = ModlogQuery {
+      community_id: Some(data.community.id),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?;
+    assert_eq!(11, modlog_community_filter.len());
+
+    let modlog_community_2_filter = ModlogQuery {
+      community_id: Some(data.community_2.id),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?;
+    assert_eq!(4, modlog_community_2_filter.len());
+
+    // Filter by post
+    let modlog_post_filter = ModlogQuery {
+      post_id: Some(data.post.id),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?;
+    assert_eq!(7, modlog_post_filter.len());
+
+    let modlog_post_2_filter = ModlogQuery {
+      post_id: Some(data.post_2.id),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?;
+    assert_eq!(3, modlog_post_2_filter.len());
+
+    // Filter by comment
+    let modlog_comment_filter = ModlogQuery {
+      comment_id: Some(data.comment.id),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?;
+    assert_eq!(3, modlog_comment_filter.len());
+
+    let modlog_comment_2_filter = ModlogQuery {
+      comment_id: Some(data.comment_2.id),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?;
+    assert_eq!(1, modlog_comment_2_filter.len());
+
+    // Filter by type
+    let modlog_type_filter = ModlogQuery {
+      type_: Some(ModlogKindFilter::Other(ModlogKind::ModRemoveComment)),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?;
+    assert_eq!(2, modlog_type_filter.len());
+
+    // Assert that the types are correct
+    assert_eq!(
+      ModlogKind::ModRemoveComment,
+      modlog_type_filter[0].modlog.kind,
+    );
+    assert_eq!(
+      ModlogKind::ModRemoveComment,
+      modlog_type_filter[1].modlog.kind,
+    );
+
+    cleanup(data, pool).await?;
+
+    Ok(())
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn hide_modlog_names() -> LemmyResult<()> {
+    let pool = &build_db_pool_for_tests();
+    let pool = &mut pool.into();
+    let data = init_data(pool).await?;
+
+    let form =
+      ModlogInsertForm::admin_allow_instance(data.timmy.id, data.instance.id, true, "reason");
+    Modlog::create(pool, &[form]).await?;
+
+    let modlog = ModlogQuery::default().list(pool, &data.local_site).await?;
+    assert_eq!(1, modlog.len());
+
+    assert_eq!(ModlogKind::AdminAllowInstance, modlog[0].modlog.kind);
+    assert_eq!(
+      Some(data.timmy.id),
+      modlog[0].moderator.as_ref().map(|a| a.id)
+    );
+
+    // Filter out the names
+    let modlog_hide_names_filter = ModlogQuery {
+      hide_modlog_names: Some(true),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?;
+    assert_eq!(1, modlog_hide_names_filter.len());
+
+    assert_eq!(
+      ModlogKind::AdminAllowInstance,
+      modlog_hide_names_filter[0].modlog.kind
+    );
+    assert!(modlog_hide_names_filter[0].moderator.is_none());
+
+    cleanup(data, pool).await?;
+
+    Ok(())
+  }
+
+  /// Verifies that a single (non-bulk) modlog entry has bulk_action_parent_id == None by default.
+  #[tokio::test]
+  #[serial]
+  async fn individual_modlog_is_not_bulk() -> LemmyResult<()> {
+    let pool = &build_db_pool_for_tests();
+    let pool = &mut pool.into();
+    let data = init_data(pool).await?;
+
+    let form = ModlogInsertForm::mod_remove_post(data.timmy.id, &data.post, true, "reason", None);
+    Modlog::create(pool, &[form]).await?;
+
+    let modlog = ModlogQuery {
+      type_: Some(ModlogKindFilter::Other(ModlogKind::ModRemovePost)),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?
+    .items;
+    assert_eq!(1, modlog.len());
+    assert!(modlog[0].modlog.bulk_action_parent_id.is_none());
+    assert_eq!(0, modlog[0].modlog.child_count);
+
+    cleanup(data, pool).await?;
+
+    Ok(())
+  }
+
+  /// Verifies bulk entries are linked to their parent and can be queried by parent ID or show_bulk.
+  #[tokio::test]
+  #[serial]
+  async fn bulk_modlog_has_parent_id() -> LemmyResult<()> {
+    let pool = &build_db_pool_for_tests();
+    let pool = &mut pool.into();
+    let data = init_data(pool).await?;
+
+    // Create a ban entry to serve as the parent
+    let ban_form =
+      ModlogInsertForm::admin_ban(&data.timmy, data.sara.id, true, None, "banning sara");
+    let ban_action = Modlog::create(pool, &[ban_form]).await?;
+    let parent_id = ban_action[0].id;
+
+    // Create two bulk post removals linked to the ban
+    let post_form_1 = ModlogInsertForm::mod_remove_post(
+      data.timmy.id,
+      &data.post,
+      true,
+      "bulk remove",
+      Some(parent_id),
+    );
+    let post_form_2 = ModlogInsertForm::mod_remove_post(
+      data.timmy.id,
+      &data.post_2,
+      true,
+      "bulk remove",
+      Some(parent_id),
+    );
+    Modlog::create(pool, &[post_form_1, post_form_2]).await?;
+
+    // Read that ban, to make sure it has 2 children
+    let ban_action = Modlog::read(pool, parent_id).await?;
+    assert_eq!(2, ban_action.child_count);
+
+    // Create one individual (non-bulk) post removal for mixed-dataset tests
+    let individual_form =
+      ModlogInsertForm::mod_remove_post(data.timmy.id, &data.post, true, "individual remove", None);
+    Modlog::create(pool, &[individual_form]).await?;
+
+    // show_bulk: Some(true) now includes bulk and non-bulk (show all)
+    let all_with_show_true = ModlogQuery {
+      type_: Some(ModlogKindFilter::Other(ModlogKind::ModRemovePost)),
+      show_bulk: Some(true),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?
+    .items;
+    // parent-linked two bulk + one individual = 3 total
+    assert_eq!(3, all_with_show_true.len());
+
+    // bulk_action_parent_id filter returns only children of that ban
+    let children = ModlogQuery {
+      bulk_action_parent_id: Some(parent_id),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?
+    .items;
+    assert_eq!(2, children.len());
+
+    // show_bulk: Some(false) returns only the non-bulk entry
+    let non_bulk = ModlogQuery {
+      type_: Some(ModlogKindFilter::Other(ModlogKind::ModRemovePost)),
+      show_bulk: Some(false),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?
+    .items;
+    assert_eq!(1, non_bulk.len());
+    assert!(non_bulk[0].modlog.bulk_action_parent_id.is_none());
+    // show_bulk: None behaves like false (hide bulk) and returns only the non-bulk entry
+    let none_behaviour = ModlogQuery {
+      type_: Some(ModlogKindFilter::Other(ModlogKind::ModRemovePost)),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?
+    .items;
+    assert_eq!(1, none_behaviour.len());
+
+    cleanup(data, pool).await?;
+
+    Ok(())
+  }
+
+  /// Verifies that bulk_action_parent_id filter isolates children of one parent from another.
+  #[tokio::test]
+  #[serial]
+  async fn bulk_action_parent_id_isolation() -> LemmyResult<()> {
+    let pool = &build_db_pool_for_tests();
+    let pool = &mut pool.into();
+    let data = init_data(pool).await?;
+
+    // Two separate ban entries as independent parents
+    let ban_form_a = ModlogInsertForm::admin_ban(&data.timmy, data.sara.id, true, None, "ban sara");
+    let ban_a = Modlog::create(pool, &[ban_form_a]).await?;
+    let parent_a_id = ban_a[0].id;
+
+    let ban_form_b =
+      ModlogInsertForm::admin_ban(&data.timmy, data.jessica.id, true, None, "ban jessica");
+    let ban_b = Modlog::create(pool, &[ban_form_b]).await?;
+    let parent_b_id = ban_b[0].id;
+
+    // Two post removals linked to parent A
+    let post_form_1 = ModlogInsertForm::mod_remove_post(
+      data.timmy.id,
+      &data.post,
+      true,
+      "bulk A",
+      Some(parent_a_id),
+    );
+    let post_form_2 = ModlogInsertForm::mod_remove_post(
+      data.timmy.id,
+      &data.post_2,
+      true,
+      "bulk A",
+      Some(parent_a_id),
+    );
+    Modlog::create(pool, &[post_form_1, post_form_2]).await?;
+
+    // Read that ban, to make sure it has 2 children
+    let parent_a = Modlog::read(pool, parent_a_id).await?;
+    assert_eq!(2, parent_a.child_count);
+
+    // Two comment removals linked to parent B
+    let comment_form_1 = ModlogInsertForm::mod_remove_comment(
+      data.timmy.id,
+      &data.comment,
+      data.community.id,
+      true,
+      "bulk B",
+      Some(parent_b_id),
+    );
+    let comment_form_2 = ModlogInsertForm::mod_remove_comment(
+      data.timmy.id,
+      &data.comment_2,
+      data.community.id,
+      true,
+      "bulk B",
+      Some(parent_b_id),
+    );
+    Modlog::create(pool, &[comment_form_1, comment_form_2]).await?;
+
+    // Read that ban, to make sure it has 2 children
+    let parent_b = Modlog::read(pool, parent_b_id).await?;
+    assert_eq!(2, parent_b.child_count);
+
+    // Filter by parent A
+    let children_of_a = ModlogQuery {
+      bulk_action_parent_id: Some(parent_a_id),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?
+    .items;
+    assert_eq!(2, children_of_a.len());
+    assert!(
+      children_of_a
+        .iter()
+        .all(|e| e.modlog.bulk_action_parent_id == Some(parent_a_id))
+    );
+
+    // Filter by parent B
+    let children_of_b = ModlogQuery {
+      bulk_action_parent_id: Some(parent_b_id),
+      ..Default::default()
+    }
+    .list(pool, &data.local_site)
+    .await?
+    .items;
+    assert_eq!(2, children_of_b.len());
+    assert!(
+      children_of_b
+        .iter()
+        .all(|e| e.modlog.bulk_action_parent_id == Some(parent_b_id))
+    );
+
+    cleanup(data, pool).await?;
+
+    Ok(())
+  }
+}

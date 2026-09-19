@@ -1,0 +1,263 @@
+From f6bfb29acd3099f8020c7db75ffdfcdf22a7b4f5 Mon Sep 17 00:00:00 2001
+From: dardiao <xn--6s1a@outlook.com>
+Date: Sat, 19 Sep 2026 23:05:54 +0800
+Subject: [PATCH 10/14] local: drop the last upstream documentation links and
+ the dead donation dialog
+
+- the composer's formatting-help button and the magnet-link "torrent help" alert both linked
+  to the upstream docs site; removed, along with the now unused url constants
+- donation-dialog.tsx has not been rendered since the footer/heart de-branding, so it and its
+  donate url are gone - this is what made join-lemmy.org finally disappear from the bundle
+- reworded three comments that still named the upstream project or its translations repo,
+  since comments ship inside the built files
+---
+ .../components/common/markdown-textarea.tsx   | 11 ---
+ .../components/common/sort-dropdown.tsx       |  4 +-
+ .../components/home/donation-dialog.tsx       | 76 -------------------
+ src/shared/components/home/site-sidebar.tsx   |  4 +-
+ src/shared/components/post/common.tsx         | 17 +----
+ .../components/post/post-listing-card.tsx     |  6 +-
+ src/shared/services/I18NextService.ts         |  2 +-
+ src/shared/utils/config.ts                    |  4 -
+ 8 files changed, 7 insertions(+), 117 deletions(-)
+ delete mode 100644 src/shared/components/home/donation-dialog.tsx
+
+diff --git a/src/shared/components/common/markdown-textarea.tsx b/src/shared/components/common/markdown-textarea.tsx
+index 11ea927c..2d952e0e 100644
+--- a/src/shared/components/common/markdown-textarea.tsx
++++ b/src/shared/components/common/markdown-textarea.tsx
+@@ -10,9 +10,7 @@ import { Language, LanguageId, MyUserInfo } from "lemmy-js-client";
+ import {
+   concurrentImageUpload,
+   markdownFieldCharacterLimit,
+-  markdownHelpUrl,
+   maxUploadImages,
+-  relTags,
+ } from "@utils/config";
+ import {
+   customEmojisLookup,
+@@ -216,15 +214,6 @@ export class MarkdownTextArea extends Component<
+                   {this.getFormatButton("spoiler", () =>
+                     handleInsertSpoiler(this),
+                   )}
+-                  <a
+-                    href={markdownHelpUrl}
+-                    className="btn btn-sm btn-link rounded-0 text-muted fw-bold"
+-                    title={I18NextService.i18n.t("formatting_help")}
+-                    rel={relTags}
+-                    target="_blank"
+-                  >
+-                    <Icon icon="help-circle" classes="icon-inline" />
+-                  </a>
+                 </div>
+               )}
+               <div>
+diff --git a/src/shared/components/common/sort-dropdown.tsx b/src/shared/components/common/sort-dropdown.tsx
+index b58bb76c..30ffe78b 100644
+--- a/src/shared/components/common/sort-dropdown.tsx
++++ b/src/shared/components/common/sort-dropdown.tsx
+@@ -136,5 +136,5 @@ export function MultiCommunitiesSortDropdown({
+   );
+ }
+ 
+-// LOCAL: upstream renders a "?" next to each sort dropdown that links to the official
+-// sorting documentation; removed so the UI carries no links to join-lemmy.org.
++// LOCAL: upstream renders a "?" next to each sort dropdown that links to the project's
++// documentation site; removed so the UI carries no links there.
+diff --git a/src/shared/components/home/donation-dialog.tsx b/src/shared/components/home/donation-dialog.tsx
+deleted file mode 100644
+index f4c6d07c..00000000
+--- a/src/shared/components/home/donation-dialog.tsx
++++ /dev/null
+@@ -1,76 +0,0 @@
+-import { Component, InfernoNode } from "inferno";
+-import { MyUserInfo } from "lemmy-js-client";
+-import { I18NextService } from "../../services";
+-import { T } from "inferno-i18next-dess";
+-import { donateLemmyUrl } from "@utils/config";
+-
+-interface Props {
+-  myUserInfo?: MyUserInfo;
+-  onHideDialog: () => void;
+-}
+-
+-interface State {
+-  show: boolean;
+-}
+-
+-export class DonationDialog extends Component<Props, State> {
+-  state: State = { show: this.initializeShow() };
+-
+-  initializeShow(): boolean {
+-    const lastNotifDate = new Date(
+-      this.props.myUserInfo?.local_user_view.local_user
+-        .last_donation_notification_at ?? Number.MAX_SAFE_INTEGER,
+-    );
+-
+-    const oneYearAgo = new Date();
+-    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+-    return lastNotifDate < oneYearAgo;
+-  }
+-
+-  render(): InfernoNode | void {
+-    if (this.state.show) {
+-      return (
+-        <div className="alert alert-info fade show" role="alert">
+-          <div className="d-flex">
+-            <h4 className="alert-heading flex-grow-1">
+-              {I18NextService.i18n.t("donation_dialog_title")}
+-            </h4>
+-            <button
+-              type="button"
+-              className="btn-close position-relative"
+-              onClick={() => handleClickHide(this)}
+-              aria-label={I18NextService.i18n.t("donation_dialog_button_hide")}
+-            ></button>
+-          </div>
+-          <div>
+-            <T i18nKey="donation_dialog_message">
+-              <br />
+-            </T>
+-          </div>
+-          <div className="mt-3">
+-            <button
+-              className="btn btn-info"
+-              onClick={() => handleClickDonate(this)}
+-            >
+-              {I18NextService.i18n.t("donation_dialog_button_donate")}
+-            </button>
+-          </div>
+-        </div>
+-      );
+-    }
+-  }
+-}
+-
+-function handleClickDonate(i: DonationDialog) {
+-  handleHideDialog(i);
+-  window.open(donateLemmyUrl, "_blank")?.focus();
+-}
+-
+-function handleClickHide(i: DonationDialog) {
+-  handleHideDialog(i);
+-}
+-
+-function handleHideDialog(i: DonationDialog) {
+-  i.setState({ show: false });
+-  i.props.onHideDialog();
+-}
+diff --git a/src/shared/components/home/site-sidebar.tsx b/src/shared/components/home/site-sidebar.tsx
+index 01024a44..a20e0ad8 100644
+--- a/src/shared/components/home/site-sidebar.tsx
++++ b/src/shared/components/home/site-sidebar.tsx
+@@ -149,8 +149,8 @@ export class SiteSidebar extends Component<SiteSidebarProps, SiteSidebarState> {
+     );
+   }
+ 
+-  // LOCAL: upstream lists the admin accounts here, which showed the default "lemmy" account
+-  // name. Show the site label instead.
++  // LOCAL: upstream lists the admin accounts here, which showed the operator's account name.
++  // Show the site label instead.
+   admins() {
+     return (
+       <ul className="mt-1 list-inline small mb-0">
+diff --git a/src/shared/components/post/common.tsx b/src/shared/components/post/common.tsx
+index 7d7bca76..ad9a22d8 100644
+--- a/src/shared/components/post/common.tsx
++++ b/src/shared/components/post/common.tsx
+@@ -5,7 +5,7 @@ import { CommunityLink } from "@components/community/community-link";
+ import { PersonListing } from "@components/person/person-listing";
+ import { I18NextService } from "@services/index";
+ import { linkTarget, setIsoData } from "@utils/app";
+-import { relTags, torrentHelpUrl } from "@utils/config";
++import { relTags } from "@utils/config";
+ import { formatRelativeDate } from "@utils/date";
+ import { httpFrontendUrl } from "@utils/env";
+ import { mdToHtmlInline } from "@utils/markdown";
+@@ -18,7 +18,6 @@ import {
+   Language,
+   CommunityTag as CommunityTagI,
+ } from "lemmy-js-client";
+-import { T } from "inferno-i18next-dess";
+ import { hostname } from "@utils/helpers";
+ import { ShowBodyType } from "@utils/types";
+ import { CommunityTag } from "@components/community/community-tag";
+@@ -277,17 +276,3 @@ export function UrlLine(
+     }
+   }
+ }
+-
+-export function TorrentHelp() {
+-  return (
+-    <div className="alert alert-info small my-2" role="alert">
+-      <Icon icon="info" classes="icon-inline me-2" />
+-      <T parent="span" i18nKey="torrent_help">
+-        #
+-        <a className="alert-link" rel={relTags} href={torrentHelpUrl}>
+-          #
+-        </a>
+-      </T>
+-    </div>
+-  );
+-}
+diff --git a/src/shared/components/post/post-listing-card.tsx b/src/shared/components/post/post-listing-card.tsx
+index 39e11274..e540a866 100644
+--- a/src/shared/components/post/post-listing-card.tsx
++++ b/src/shared/components/post/post-listing-card.tsx
+@@ -1,6 +1,6 @@
+ import { tippyMixin } from "@components/mixins/tippy-mixin";
+ import { mdToHtml } from "@utils/markdown";
+-import { isAudio, isImage, isMagnetLink, isVideo } from "@utils/media";
++import { isAudio, isImage, isVideo } from "@utils/media";
+ import {
+   ShowBodyType,
+   ShowCrossPostsType,
+@@ -39,7 +39,6 @@ import {
+   PostCreatedLine,
+   PostPublishedTime,
+   UrlLine,
+-  TorrentHelp,
+   PostBadges,
+ } from "./common";
+ import { CrossPosts } from "./cross-posts";
+@@ -226,9 +225,6 @@ export class PostListingCard extends Component<
+             onPersonNote={p.onPersonNote}
+           />
+         </article>
+-        {p.showBody === "full" &&
+-          p.postView.post.url &&
+-          isMagnetLink(p.postView.post.url) && <TorrentHelp />}
+         {p.showBody === "full" &&
+           p.postView.post.url &&
+           p.postView.post.embed_title && (
+diff --git a/src/shared/services/I18NextService.ts b/src/shared/services/I18NextService.ts
+index 0f8b4668..f54715fc 100644
+--- a/src/shared/services/I18NextService.ts
++++ b/src/shared/services/I18NextService.ts
+@@ -6,7 +6,7 @@ import { isBrowser } from "@utils/browser";
+ import { toast } from "@utils/app";
+ 
+ export type TranslationDesc = {
+-  // Name of the translation file in `lemmy-translations`
++  // Name of the translation resource
+   resource: string;
+   // Name of the language in datefns library (undefined if it is equal to `resource`)
+   datefns_resource?: string;
+diff --git a/src/shared/utils/config.ts b/src/shared/utils/config.ts
+index 6b5bcc19..e556a1cd 100644
+--- a/src/shared/utils/config.ts
++++ b/src/shared/utils/config.ts
+@@ -3,10 +3,6 @@ import { getStaticDir } from "@utils/env";
+ export const favIconUrl = `${getStaticDir()}/assets/icons/favicon.svg`;
+ export const favIconPngUrl = `${getStaticDir()}/assets/icons/apple-touch-icon.png`;
+ 
+-export const joinLemmyUrl = "https://join-lemmy.org";
+-export const donateLemmyUrl = `${joinLemmyUrl}/donate`;
+-export const markdownHelpUrl = `${joinLemmyUrl}/docs/en/users/02-media.html`;
+-export const torrentHelpUrl = `${markdownHelpUrl}#torrents`;
+ export const archiveTodayUrl = "https://archive.today";
+ export const ghostArchiveUrl = "https://ghostarchive.org";
+ export const webArchiveUrl = "https://web.archive.org";
+-- 
+2.54.0
+

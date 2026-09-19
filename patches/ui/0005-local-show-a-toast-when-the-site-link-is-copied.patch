@@ -1,0 +1,31 @@
+From 504127b46f6c2e0740afe986431671c673045cc8 Mon Sep 17 00:00:00 2001
+From: dardiao <xn--6s1a@outlook.com>
+Date: Sat, 19 Sep 2026 11:54:41 +0800
+Subject: [PATCH 05/14] local: show a toast when the site link is copied
+
+---
+ src/shared/components/app/navbar.tsx | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/shared/components/app/navbar.tsx b/src/shared/components/app/navbar.tsx
+index 5ef7e817..a10c34bd 100644
+--- a/src/shared/components/app/navbar.tsx
++++ b/src/shared/components/app/navbar.tsx
+@@ -1,4 +1,4 @@
+-import { showAvatars, showMedia } from "@utils/app";
++import { showAvatars, showMedia, toast } from "@utils/app";
+ import { isBrowser } from "@utils/browser";
+ import { numToSI } from "@utils/helpers";
+ import {
+@@ -566,6 +566,8 @@ function copySiteLink(i: Navbar) {
+     .then(() => {
+       i.setState({ copied: true });
+       window.setTimeout(() => i.setState({ copied: false }), 1500);
++      // LOCAL: a toast is easier to notice than the icon swap on its own.
++      toast(copiedLabel);
+     })
+     .catch(() => window.prompt(copyLinkLabel, url));
+ }
+-- 
+2.54.0
+

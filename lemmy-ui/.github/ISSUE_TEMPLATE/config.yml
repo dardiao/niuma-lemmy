@@ -1,0 +1,7 @@
+contact_links:
+  - name: Question
+    url: https://lemmy.ml/c/lemmy_support
+    about: Please ask and answer general questions here.
+  - name: Technical Discussion
+    url: https://github.com/LemmyNet/lemmy-ui/discussions
+    about: Please discuss technical topics with other contributors here.

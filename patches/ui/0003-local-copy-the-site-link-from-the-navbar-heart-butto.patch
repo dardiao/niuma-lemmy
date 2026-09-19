@@ -1,0 +1,119 @@
+From 0d5417268ed5a86791b7fb2f8aec20556d7e62fe Mon Sep 17 00:00:00 2001
+From: dardiao <xn--6s1a@outlook.com>
+Date: Sat, 19 Sep 2026 11:46:24 +0800
+Subject: [PATCH 03/14] local: copy the site link from the navbar heart button
+
+Clicking the heart used to open the Lemmy donation page. It now copies a link to this site
+and flashes a check mark for a moment. navigator.clipboard only exists in a secure context,
+so the fallback exposes the URL in a prompt.
+---
+ src/shared/components/app/navbar.tsx | 43 +++++++++++++++++-----------
+ src/shared/utils/config.ts           |  5 ++--
+ 2 files changed, 28 insertions(+), 20 deletions(-)
+
+diff --git a/src/shared/components/app/navbar.tsx b/src/shared/components/app/navbar.tsx
+index 6ec34fc2..5ef7e817 100644
+--- a/src/shared/components/app/navbar.tsx
++++ b/src/shared/components/app/navbar.tsx
+@@ -9,7 +9,7 @@ import {
+ import { Component, createRef } from "inferno";
+ import { NavLink } from "inferno-router";
+ import { GetSiteResponse, MyUserInfo } from "lemmy-js-client";
+-import { bookmarkHint, bookmarkLabel } from "@utils/config";
++import { copiedLabel, copyLinkLabel } from "@utils/config";
+ import {
+   I18NextService,
+   UserService,
+@@ -33,6 +33,7 @@ interface NavbarState {
+   unreadReportCount: number;
+   unreadApplicationCount: number;
+   unreadPendingFollowsCount: number;
++  copied: boolean;
+ }
+ 
+ @tippyMixin
+@@ -49,6 +50,7 @@ export class Navbar extends Component<NavbarProps, NavbarState> {
+     unreadReportCount: 0,
+     unreadApplicationCount: 0,
+     unreadPendingFollowsCount: 0,
++    copied: false,
+   };
+ 
+   componentWillMount() {
+@@ -243,16 +245,20 @@ export class Navbar extends Component<NavbarProps, NavbarState> {
+                 </NavLink>
+               </li>
+               <li className="nav-item">
+-                {/* LOCAL: used to be a link to the Lemmy donation page. */}
++                {/* LOCAL: used to be a link to the Lemmy donation page; it now copies a link
++                    to this site. */}
+                 <button
+                   type="button"
+                   className="nav-link d-inline-flex align-items-center d-md-inline-block border-0 bg-transparent"
+-                  title={bookmarkLabel}
+-                  onClick={() => bookmarkSite()}
++                  title={this.state.copied ? copiedLabel : copyLinkLabel}
++                  onClick={() => copySiteLink(this)}
+                 >
+-                  <Icon icon="heart" classes="small" />
++                  <Icon
++                    icon={this.state.copied ? "check" : "heart"}
++                    classes="small"
++                  />
+                   <span className="d-inline ms-1 d-md-none ms-md-0">
+-                    {bookmarkLabel}
++                    {this.state.copied ? copiedLabel : copyLinkLabel}
+                   </span>
+                 </button>
+               </li>
+@@ -546,17 +552,20 @@ function unreadNotificationsCount(unreadNotifsCount: number) {
+   });
+ }
+ 
+-// LOCAL: no browser exposes an API to add a bookmark, so use the share sheet where the
+-// platform has one (it offers "add bookmark" on macOS) and otherwise copy the URL and tell
+-// the user the keyboard shortcut.
+-function bookmarkSite() {
++// LOCAL: copy the site link, then flash a check mark as confirmation. navigator.clipboard is
++// only defined in a secure context, so fall back to a prompt that exposes the URL.
++function copySiteLink(i: Navbar) {
+   const url = window.location.origin;
+-  if (navigator.share) {
+-    navigator.share({ title: document.title, url }).catch(() => undefined);
+-  } else {
+-    void navigator.clipboard
+-      ?.writeText(url)
+-      .then(() => alert(bookmarkHint(url)))
+-      .catch(() => undefined);
++  const clipboard = navigator.clipboard;
++  if (!clipboard) {
++    window.prompt(copyLinkLabel, url);
++    return;
+   }
++  clipboard
++    .writeText(url)
++    .then(() => {
++      i.setState({ copied: true });
++      window.setTimeout(() => i.setState({ copied: false }), 1500);
++    })
++    .catch(() => window.prompt(copyLinkLabel, url));
+ }
+diff --git a/src/shared/utils/config.ts b/src/shared/utils/config.ts
+index 2c57353e..90386623 100644
+--- a/src/shared/utils/config.ts
++++ b/src/shared/utils/config.ts
+@@ -20,9 +20,8 @@ export const matrixUrl = "https://matrix.org/try-matrix/";
+ // Site-specific strings for this deployment. Kept together and marked with LOCAL: so it is
+ // obvious what to re-check when rebasing onto a newer upstream.
+ export const instanceLabel = "niuma.club";
+-export const bookmarkLabel = "收藏本站";
+-export const bookmarkHint = (url: string): string =>
+-  `已复制本站地址：\n${url}\n\n按 ⌘+D（Windows 为 Ctrl+D）即可加入收藏夹。`;
++export const copyLinkLabel = "复制链接";
++export const copiedLabel = "已复制";
+ 
+ export const postRefetchSeconds: number = 60 * 1000;
+ export const mentionDropdownFetchLimit = 10;
+-- 
+2.54.0
+

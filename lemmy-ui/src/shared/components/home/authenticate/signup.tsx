@@ -1,0 +1,602 @@
+import { setIsoData, updateMyUserInfo } from "@utils/app";
+import { isBrowser, refreshTheme } from "@utils/browser";
+import { resourcesSettled, validEmail } from "@utils/helpers";
+import { Component, FormEvent, InfernoNode } from "inferno";
+import {
+  CaptchaResponse,
+  GetCaptchaResponse,
+  LoginResponse,
+  SiteView,
+} from "lemmy-js-client";
+import {
+  domainCheckMessages,
+  domainCheckPath,
+  signupDomainSuffix,
+  validActorRegexPattern,
+} from "@utils/config";
+import { I18NextService } from "@services/I18NextService";
+import { UserService } from "@services/UserService";
+import {
+  EMPTY_REQUEST,
+  HttpService,
+  LOADING_REQUEST,
+  RequestState,
+} from "@services/HttpService";
+import { toast } from "@utils/app";
+import { HtmlTags } from "../../common/html-tags";
+import { Icon, Spinner } from "../../common/icon";
+import PasswordInput from "../../common/password-input";
+import { scrollMixin } from "@components/mixins/scroll-mixin";
+import { RouteData } from "@utils/types";
+import { RouteComponentProps, RouterContext } from "inferno-router";
+import { IRoutePropsWithFetch } from "@utils/routes";
+import { OAuthLogin } from "../oauth/oauth-login";
+import { RegistrationApplicationInput } from "./registration-application-input";
+import { RegistrationLegalInfo } from "./registration-legal-info";
+import { RegistrationCheckboxes } from "./registration-checkboxes";
+import { removeLocalStorageMarkdown } from "@components/common/markdown-textarea";
+
+// LOCAL: result of the subdomain lookup for the username being typed.
+type DomainCheck = {
+  state: "checking" | "ok" | "bad" | "unavailable";
+  message?: string;
+  // optional inline link + trailing text, used to point at the dns platform
+  link?: { text: string; href: string };
+  tail?: string;
+};
+
+interface State {
+  registerRes: RequestState<LoginResponse>;
+  captchaRes: RequestState<GetCaptchaResponse>;
+  form: {
+    username?: string;
+    email?: string;
+    password?: string;
+    password_verify?: string;
+    show_nsfw: boolean;
+    captcha_uuid?: string;
+    captcha_answer?: string;
+    honeypot?: string;
+    answer?: string;
+    stay_logged_in: boolean;
+  };
+  captchaPlaying: boolean;
+  domainCheck?: DomainCheck;
+}
+
+type SignupRouteProps = RouteComponentProps<Record<string, never>>;
+export type SignupFetchConfig = IRoutePropsWithFetch<
+  RouteData,
+  Record<string, never>,
+  object
+>;
+
+@scrollMixin
+export class Signup extends Component<SignupRouteProps, State> {
+  public isoData = setIsoData(this.context);
+  public audio?: HTMLAudioElement;
+
+  state: State = {
+    registerRes: EMPTY_REQUEST,
+    captchaRes: EMPTY_REQUEST,
+    form: {
+      show_nsfw: !!this.isoData.siteRes?.site_view.site.content_warning,
+      stay_logged_in: false,
+    },
+    captchaPlaying: false,
+  };
+
+  loadingSettled() {
+    return (
+      !this.isoData.siteRes?.captcha_enabled ||
+      resourcesSettled([this.state.captchaRes])
+    );
+  }
+
+  async componentWillMount() {
+    if (this.isoData.siteRes?.captcha_enabled && isBrowser()) {
+      await this.fetchCaptcha();
+    }
+  }
+
+  async fetchCaptcha() {
+    this.setState({ captchaRes: LOADING_REQUEST });
+    this.setState({
+      captchaRes: await HttpService.client.getCaptcha(),
+    });
+
+    this.setState(s => {
+      if (s.captchaRes.state === "success") {
+        s.form.captcha_uuid = s.captchaRes.data.ok?.uuid;
+      }
+      return s;
+    });
+  }
+
+  get documentTitle(): string {
+    const siteView = this.isoData.siteRes?.site_view;
+    return `${signupTitleName(siteView)} - ${siteView?.site.name}`;
+  }
+
+  render() {
+    return (
+      <div className="home-signup container-lg">
+        <HtmlTags
+          title={this.documentTitle}
+          context={this.context as RouterContext}
+        />
+        <div className="row">
+          <div className="col-12 col-lg-6 offset-lg-3">
+            {this.registerForm()}
+          </div>
+        </div>
+        <OAuthLogin oauth_providers={this.isoData.siteRes.oauth_providers} />
+      </div>
+    );
+  }
+
+  registerForm() {
+    const siteView = this.isoData.siteRes?.site_view;
+
+    return (
+      <form
+        className="was-validated"
+        onSubmit={e => handleRegisterSubmit(this, e)}
+      >
+        <h1 className="h4 mb-4">{signupTitleName(siteView)}</h1>
+
+        <div className="mb-3 row">
+          <label
+            className="col-sm-2 col-form-label"
+            htmlFor="register-username"
+          >
+            {I18NextService.i18n.t("username")}
+          </label>
+
+          <div className="col-sm-10">
+            {/* LOCAL: the username is the prefix of a subdomain registered on the operator's
+                dns platform, so the suffix is fixed and shown next to the input. */}
+            <div className="input-group">
+              <input
+                type="text"
+                id="register-username"
+                className="form-control"
+                value={this.state.form.username}
+                onInput={e => handleRegisterUsernameChange(this, e)}
+                onBlur={() => checkSignupDomain(this)}
+                required
+                minLength={2}
+                pattern={validActorRegexPattern}
+                title={I18NextService.i18n.t("community_reqs")}
+              />
+              <span className="input-group-text text-body-secondary">
+                .{signupDomainSuffix}
+              </span>
+            </div>
+            {domainCheckHint(this)}
+          </div>
+        </div>
+
+        <div className="mb-3 row">
+          <label className="col-sm-2 col-form-label" htmlFor="register-email">
+            {I18NextService.i18n.t("email")}
+          </label>
+          <div className="col-sm-10">
+            <input
+              type="email"
+              id="register-email"
+              className="form-control"
+              placeholder={
+                siteView?.local_site.email_verification_required
+                  ? I18NextService.i18n.t("required")
+                  : I18NextService.i18n.t("optional")
+              }
+              value={this.state.form.email}
+              autoComplete="email"
+              onInput={e => handleRegisterEmailChange(this, e)}
+              required={siteView?.local_site.email_verification_required}
+              minLength={3}
+            />
+            {!siteView?.local_site.email_verification_required &&
+              this.state.form.email &&
+              !validEmail(this.state.form.email) && (
+                <div className="mt-2 mb-0 alert alert-warning" role="alert">
+                  <Icon icon="alert-triangle" classes="icon-inline me-2" />
+                  {I18NextService.i18n.t("no_password_reset")}
+                </div>
+              )}
+          </div>
+        </div>
+        <div className="mb-3">
+          <PasswordInput
+            id="register-password"
+            value={this.state.form.password}
+            onInput={e => handleRegisterPasswordChange(this, e)}
+            showStrength
+            label={I18NextService.i18n.t("password")}
+            isNew
+          />
+        </div>
+        <div className="mb-3">
+          <PasswordInput
+            id="register-verify-password"
+            value={this.state.form.password_verify}
+            onInput={e => handleRegisterPasswordVerifyChange(this, e)}
+            label={I18NextService.i18n.t("verify_password")}
+            isNew
+          />
+        </div>
+
+        <RegistrationApplicationInput
+          getSiteRes={this.isoData.siteRes}
+          onAnswerChange={answer => handleAnswerChange(this, answer)}
+        />
+        {this.renderCaptcha()}
+        <RegistrationLegalInfo siteView={siteView} />
+        <RegistrationCheckboxes
+          form={this.state.form}
+          onRegisterShowNsfwChange={e => handleRegisterShowNsfwChange(this, e)}
+          onStayLoggedInChange={e => handleStayLoggedInChange(this, e)}
+          onHoneyPotChange={e => handleHoneyPotChange(this, e)}
+        />
+        <div className="mb-3 row">
+          <div className="col-sm-10">
+            <button type="submit" className="btn btn-light border-light-subtle">
+              {this.state.registerRes.state === "loading" ? (
+                <Spinner />
+              ) : (
+                signupTitleName(siteView)
+              )}
+            </button>
+          </div>
+        </div>
+      </form>
+    );
+  }
+
+  renderCaptcha(): InfernoNode | void {
+    switch (this.state.captchaRes.state) {
+      case "loading":
+        return <Spinner />;
+      case "success": {
+        const res = this.state.captchaRes.data;
+        return (
+          <div className="mb-3 row">
+            <label className="col-sm-2" htmlFor="register-captcha">
+              <span className="me-2">
+                {I18NextService.i18n.t("enter_code")}
+              </span>
+              <button
+                type="button"
+                className="btn btn-light border-light-subtle"
+                onClick={() => handleRegenCaptcha(this)}
+                aria-label={I18NextService.i18n.t("captcha")}
+              >
+                <Icon icon="refresh-cw" classes="icon-refresh-cw" />
+              </button>
+            </label>
+            {this.showCaptcha(res)}
+            <div className="col-sm-6">
+              <input
+                type="text"
+                className="form-control"
+                id="register-captcha"
+                value={this.state.form.captcha_answer}
+                onInput={e => handleRegisterCaptchaAnswerChange(this, e)}
+                required
+              />
+            </div>
+          </div>
+        );
+      }
+    }
+  }
+
+  showCaptcha(res: GetCaptchaResponse) {
+    const captchaRes = res?.ok;
+    return captchaRes ? (
+      <div className="col-sm-4">
+        <>
+          <img
+            className="rounded-top img-fluid"
+            src={captchaPngSrc(captchaRes)}
+            style="border-bottom-right-radius: 0; border-bottom-left-radius: 0;"
+            alt={I18NextService.i18n.t("captcha")}
+          />
+          {captchaRes.wav && (
+            <button
+              className="rounded-bottom btn btn-sm btn-light border-light-subtle d-block"
+              style="border-top-right-radius: 0; border-top-left-radius: 0;"
+              title={I18NextService.i18n.t("play_captcha_audio")}
+              onClick={() => handleCaptchaPlay(this)}
+              type="button"
+              disabled={this.state.captchaPlaying}
+            >
+              <Icon icon="play" classes="icon-play" />
+            </button>
+          )}
+        </>
+      </div>
+    ) : (
+      <></>
+    );
+  }
+}
+
+async function handleRegisterSubmit(
+  i: Signup,
+  event: FormEvent<HTMLFormElement>,
+) {
+  event.preventDefault();
+  const {
+    show_nsfw,
+    answer,
+    captcha_answer,
+    captcha_uuid,
+    email,
+    honeypot,
+    password,
+    password_verify,
+    username,
+    stay_logged_in,
+  } = i.state.form;
+
+  // LOCAL: never submit a username whose subdomain is not registered on the dns platform.
+  if (username) {
+    if (!i.state.domainCheck || i.state.domainCheck.state === "checking") {
+      await checkSignupDomain(i);
+    }
+    if (i.state.domainCheck?.state === "bad") {
+      toast(i.state.domainCheck.message ?? "", "danger");
+      return;
+    }
+  }
+
+  // normal registration
+  if (username && password && password_verify) {
+    i.setState({ registerRes: LOADING_REQUEST });
+
+    const registerRes = await HttpService.client.register({
+      username,
+      password,
+      password_verify,
+      email,
+      show_nsfw,
+      captcha_uuid,
+      captcha_answer,
+      honeypot,
+      answer,
+      stay_logged_in,
+    });
+    switch (registerRes.state) {
+      case "failed": {
+        toast(registerRes.err.name, "danger");
+        i.setState({ registerRes: EMPTY_REQUEST });
+        break;
+      }
+
+      case "success": {
+        const data = registerRes.data;
+        // Only log them in if a jwt was set
+        if (data.jwt) {
+          UserService.Instance.login({ res: data });
+
+          const myUserRes = await HttpService.client.getMyUser();
+
+          if (myUserRes.state === "success") {
+            removeLocalStorageMarkdown();
+
+            updateMyUserInfo(myUserRes.data);
+            refreshTheme();
+            await I18NextService.reconfigure(
+              window.navigator.languages,
+              myUserRes.data.local_user_view.local_user.interface_language,
+            );
+          }
+
+          i.props.history.replace("/communities");
+        } else {
+          if (data.verify_email_sent) {
+            toast(I18NextService.i18n.t("verify_email_sent"));
+          }
+          if (data.registration_created) {
+            toast(I18NextService.i18n.t("registration_application_sent"));
+          }
+          i.props.history.push("/");
+        }
+        break;
+      }
+    }
+  }
+}
+
+function handleRegisterUsernameChange(
+  i: Signup,
+  event: FormEvent<HTMLInputElement>,
+) {
+  // LOCAL: the field only holds the subdomain prefix: strip a pasted suffix and normalise
+  // case, because DNS labels are lower case. Any change invalidates the previous check.
+  const suffix = `.${signupDomainSuffix}`;
+  let value: string = event.target.value.trim().toLowerCase();
+  if (value.endsWith(suffix)) {
+    value = value.slice(0, -suffix.length);
+  }
+  i.state.form.username = value;
+  i.state.domainCheck = undefined;
+  i.setState(i.state);
+}
+
+// LOCAL: ask the ui server (same origin, no CORS involved) whether the subdomain is registered
+// on the operator's dns platform. Only "registered" is accepted; everything else blocks the
+// signup, except a lookup failure, which only warns - the registration is reviewed by an admin
+// anyway.
+async function checkSignupDomain(i: Signup) {
+  const name = i.state.form.username?.trim().toLowerCase();
+  if (!name) {
+    i.state.domainCheck = { state: "ok" };
+    i.setState(i.state);
+    return;
+  }
+  // LOCAL: match Lemmy's own actor-name rule instead of the DNS label rule, so a name this
+  // check accepts is also a name the backend accepts.
+  if (!/^[a-z0-9_]{2,20}$/.test(name)) {
+    i.state.domainCheck = {
+      state: "bad",
+      message: domainCheckMessages.invalid,
+    };
+    i.setState(i.state);
+    return;
+  }
+
+  i.state.domainCheck = {
+    state: "checking",
+    message: domainCheckMessages.checking,
+  };
+  i.setState(i.state);
+
+  try {
+    const res = await fetch(
+      `${domainCheckPath}?name=${encodeURIComponent(name)}`,
+    );
+    const data = (await res.json()) as { status?: string; reason?: string };
+    if (data.status === "registered") {
+      i.state.domainCheck = { state: "ok", message: domainCheckMessages.ok };
+    } else if (data.reason) {
+      // the platform explained why (a reserved prefix, for example): show it as-is
+      i.state.domainCheck = { state: "bad", message: data.reason };
+    } else {
+      const hint = domainCheckMessages.unregistered;
+      i.state.domainCheck = {
+        state: "bad",
+        message: hint.text,
+        link: hint.link,
+        tail: hint.tail,
+      };
+    }
+  } catch {
+    i.state.domainCheck = {
+      state: "unavailable",
+      message: domainCheckMessages.unavailable,
+    };
+  }
+  i.setState(i.state);
+}
+
+function domainCheckHint(i: Signup) {
+  const check = i.state.domainCheck;
+  if (!check?.message) {
+    return undefined;
+  }
+  const cls =
+    check.state === "ok"
+      ? "text-success"
+      : check.state === "bad"
+        ? "text-danger"
+        : "text-warning";
+  return (
+    <div className={`form-text ${cls}`}>
+      {check.message}
+      {check.link && (
+        <>
+          <a href={check.link.href} target="_blank" rel="noopener noreferrer">
+            {check.link.text}
+          </a>
+          {check.tail}
+        </>
+      )}
+    </div>
+  );
+}
+
+function handleRegisterEmailChange(
+  i: Signup,
+  event: FormEvent<HTMLInputElement>,
+) {
+  i.state.form.email = event.target.value;
+  if (i.state.form.email === "") {
+    i.state.form.email = undefined;
+  }
+  i.setState(i.state);
+}
+
+function handleRegisterPasswordChange(
+  i: Signup,
+  event: FormEvent<HTMLInputElement>,
+) {
+  i.state.form.password = event.target.value;
+  i.setState(i.state);
+}
+
+function handleRegisterPasswordVerifyChange(
+  i: Signup,
+  event: FormEvent<HTMLInputElement>,
+) {
+  i.state.form.password_verify = event.target.value;
+  i.setState(i.state);
+}
+
+function handleRegisterShowNsfwChange(i: Signup, checked: boolean) {
+  i.state.form.show_nsfw = checked;
+  i.setState(i.state);
+}
+
+function handleStayLoggedInChange(i: Signup, checked: boolean) {
+  i.state.form.stay_logged_in = checked;
+  i.setState(i.state);
+}
+
+function handleRegisterCaptchaAnswerChange(
+  i: Signup,
+  event: FormEvent<HTMLInputElement>,
+) {
+  i.state.form.captcha_answer = event.target.value;
+  i.setState(i.state);
+}
+
+function handleAnswerChange(i: Signup, val: string) {
+  i.setState(s => ((s.form.answer = val), s));
+}
+
+function handleHoneyPotChange(i: Signup, value: string) {
+  i.state.form.honeypot = value;
+  i.setState(i.state);
+}
+
+async function handleRegenCaptcha(i: Signup) {
+  i.audio = undefined;
+  i.setState({ captchaPlaying: false });
+  await i.fetchCaptcha();
+}
+
+async function handleCaptchaPlay(i: Signup) {
+  // This was a bad bug, it should only build the new audio on a new file.
+  // Replays would stop prematurely if this was rebuilt every time.
+
+  if (i.state.captchaRes.state === "success" && i.state.captchaRes.data.ok) {
+    const captchaRes = i.state.captchaRes.data.ok;
+    if (!i.audio) {
+      const base64 = `data:audio/wav;base64,${captchaRes.wav}`;
+      i.audio = new Audio(base64);
+      await i.audio.play();
+
+      i.setState({ captchaPlaying: true });
+
+      i.audio.addEventListener("ended", () => {
+        if (i.audio) {
+          i.audio.currentTime = 0;
+          i.setState({ captchaPlaying: false });
+        }
+      });
+    }
+  }
+}
+
+function captchaPngSrc(captcha: CaptchaResponse) {
+  return `data:image/png;base64,${captcha.png}`;
+}
+
+export function signupTitleName(siteView?: SiteView): string {
+  return I18NextService.i18n.t(
+    siteView?.local_site.private_instance ? "apply_to_join" : "sign_up",
+  );
+}

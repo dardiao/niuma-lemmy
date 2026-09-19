@@ -1,0 +1,242 @@
+use chrono::{DateTime, Utc};
+#[cfg(feature = "full")]
+use lemmy_db_schema_file::schema::local_site;
+use lemmy_db_schema_file::{
+  PersonId,
+  enums::{
+    CommentSortType,
+    FederationMode,
+    ImageMode,
+    ListingType,
+    PostListingMode,
+    PostSortType,
+    RegistrationMode,
+  },
+  newtypes::{LocalSiteId, MultiCommunityId, SiteId},
+};
+use serde::{Deserialize, Serialize};
+use serde_with::skip_serializing_none;
+
+#[skip_serializing_none]
+#[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "full", derive(Queryable, Selectable, Identifiable))]
+#[cfg_attr(feature = "full", diesel(table_name = local_site))]
+#[cfg_attr(feature = "full", diesel(belongs_to(crate::source::site::Site)))]
+#[cfg_attr(feature = "full", diesel(check_for_backend(diesel::pg::Pg)))]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(optional_fields, export))]
+/// The local site.
+pub struct LocalSite {
+  pub id: LocalSiteId,
+  pub site_id: SiteId,
+  /// True if the site is set up.
+  pub site_setup: bool,
+  /// Whether only admins can create communities.
+  pub community_creation_admin_only: bool,
+  /// Whether emails are required.
+  pub email_verification_required: bool,
+  /// An optional registration application questionnaire in markdown.
+  pub application_question: Option<String>,
+  /// Whether the instance is private or public.
+  pub private_instance: bool,
+  /// The default front-end theme.
+  pub default_theme: String,
+  pub default_post_listing_type: ListingType,
+  /// An optional legal disclaimer page.
+  pub legal_information: Option<String>,
+  /// Whether new applications email admins.
+  pub application_email_admins: bool,
+  /// An optional regex to filter words.
+  pub slur_filter_regex: Option<String>,
+  /// Whether federation is enabled.
+  pub federation_enabled: bool,
+  pub published_at: DateTime<Utc>,
+  pub updated_at: Option<DateTime<Utc>>,
+  pub registration_mode: RegistrationMode,
+  /// Whether to email admins on new reports.
+  pub reports_email_admins: bool,
+  /// Whether to sign outgoing Activitypub fetches with private key of local instance. Some
+  /// Fediverse instances and platforms require this.
+  pub federation_signed_fetch: bool,
+  /// Default value for [LocalSite.post_listing_mode]
+  pub default_post_listing_mode: PostListingMode,
+  /// Default value for [LocalUser.post_sort_type]
+  pub default_post_sort_type: PostSortType,
+  /// Default value for [LocalUser.comment_sort_type]
+  pub default_comment_sort_type: CommentSortType,
+  /// Whether or not external auth methods can auto-register users.
+  pub oauth_registration: bool,
+  /// What kind of post upvotes your site allows.
+  pub post_upvotes: FederationMode,
+  /// What kind of post downvotes your site allows.
+  pub post_downvotes: FederationMode,
+  /// What kind of comment upvotes your site allows.
+  pub comment_upvotes: FederationMode,
+  /// What kind of comment downvotes your site allows.
+  pub comment_downvotes: FederationMode,
+  /// A default time range limit to apply to post sorts, in seconds.
+  pub default_post_time_range_seconds: Option<i32>,
+  /// Block NSFW content being created
+  pub nsfw_content_disallowed: bool,
+  pub users: i32,
+  pub posts: i32,
+  pub comments: i32,
+  pub communities: i32,
+  /// The number of users with any activity in the last day.
+  pub users_active_day: i32,
+  /// The number of users with any activity in the last week.
+  pub users_active_week: i32,
+  /// The number of users with any activity in the last month.
+  pub users_active_month: i32,
+  /// The number of users with any activity in the last half year.
+  pub users_active_half_year: i32,
+  /// Dont send email notifications to users for new replies, mentions etc
+  pub email_notifications_disabled: bool,
+  pub suggested_multi_community_id: Option<MultiCommunityId>,
+  #[serde(skip)]
+  pub system_account: PersonId,
+  pub default_items_per_page: i32,
+  /// A mode for setting how pictrs handles images.
+  pub image_mode: ImageMode,
+  /// Allows bypassing proxy for specific image hosts when using [[ImageMode.ProxyAllImages]]. Use
+  /// a comma-delimited string.
+  ///
+  /// Example: i.imgur.com,postimg.cc
+  pub image_proxy_bypass_domains: Option<String>,
+  pub image_upload_timeout_seconds: i32,
+  /// These are pixel sizes. Larger images are automatically downscaled.
+  pub image_max_thumbnail_size: i32,
+  pub image_max_avatar_size: i32,
+  pub image_max_banner_size: i32,
+  /// This affects post and comment images, but not avatar and banner sizes.
+  pub image_max_upload_size: i32,
+  /// This affects post and comment images, but not avatars and banners.
+  pub image_allow_video_uploads: bool,
+  pub image_upload_disabled: bool,
+  /// How many active invite links a user can have
+  pub max_invites_per_user_allowed: i32,
+}
+
+#[derive(Clone, derive_new::new)]
+#[cfg_attr(feature = "full", derive(Insertable))]
+#[cfg_attr(feature = "full", diesel(table_name = local_site))]
+pub struct LocalSiteInsertForm {
+  pub site_id: SiteId,
+  pub system_account: PersonId,
+  #[new(default)]
+  pub site_setup: Option<bool>,
+  #[new(default)]
+  pub community_creation_admin_only: Option<bool>,
+  #[new(default)]
+  pub email_verification_required: Option<bool>,
+  #[new(default)]
+  pub application_question: Option<String>,
+  #[new(default)]
+  pub private_instance: Option<bool>,
+  #[new(default)]
+  pub default_theme: Option<String>,
+  #[new(default)]
+  pub default_post_listing_type: Option<ListingType>,
+  #[new(default)]
+  pub legal_information: Option<String>,
+  #[new(default)]
+  pub application_email_admins: Option<bool>,
+  #[new(default)]
+  pub slur_filter_regex: Option<String>,
+  #[new(default)]
+  pub federation_enabled: Option<bool>,
+  #[new(default)]
+  pub registration_mode: Option<RegistrationMode>,
+  #[new(default)]
+  pub reports_email_admins: Option<bool>,
+  #[new(default)]
+  pub federation_signed_fetch: Option<bool>,
+  #[new(default)]
+  pub default_post_listing_mode: Option<PostListingMode>,
+  #[new(default)]
+  pub default_post_sort_type: Option<PostSortType>,
+  #[new(default)]
+  pub default_comment_sort_type: Option<CommentSortType>,
+  #[new(default)]
+  pub oauth_registration: Option<bool>,
+  #[new(default)]
+  pub post_upvotes: Option<FederationMode>,
+  #[new(default)]
+  pub post_downvotes: Option<FederationMode>,
+  #[new(default)]
+  pub comment_upvotes: Option<FederationMode>,
+  #[new(default)]
+  pub comment_downvotes: Option<FederationMode>,
+  #[new(default)]
+  pub default_post_time_range_seconds: Option<i32>,
+  #[new(default)]
+  pub nsfw_content_disallowed: bool,
+  #[new(default)]
+  pub email_notifications_disabled: bool,
+  #[new(default)]
+  pub suggested_multi_community_id: Option<MultiCommunityId>,
+  #[new(default)]
+  pub image_mode: Option<ImageMode>,
+  #[new(default)]
+  pub image_proxy_bypass_domains: Option<String>,
+  #[new(default)]
+  pub image_upload_timeout_seconds: Option<i32>,
+  #[new(default)]
+  pub image_max_thumbnail_size: Option<i32>,
+  #[new(default)]
+  pub image_max_avatar_size: Option<i32>,
+  #[new(default)]
+  pub image_max_banner_size: Option<i32>,
+  #[new(default)]
+  pub image_max_upload_size: Option<i32>,
+  #[new(default)]
+  pub image_allow_video_uploads: Option<bool>,
+  #[new(default)]
+  pub image_upload_disabled: Option<bool>,
+  #[new(default)]
+  pub max_invites_per_user_allowed: Option<i32>,
+}
+
+#[derive(Clone, Default)]
+#[cfg_attr(feature = "full", derive(AsChangeset))]
+#[cfg_attr(feature = "full", diesel(table_name = local_site))]
+pub struct LocalSiteUpdateForm {
+  pub site_setup: Option<bool>,
+  pub community_creation_admin_only: Option<bool>,
+  pub email_verification_required: Option<bool>,
+  pub application_question: Option<Option<String>>,
+  pub private_instance: Option<bool>,
+  pub default_theme: Option<String>,
+  pub default_post_listing_type: Option<ListingType>,
+  pub legal_information: Option<Option<String>>,
+  pub application_email_admins: Option<bool>,
+  pub slur_filter_regex: Option<Option<String>>,
+  pub federation_enabled: Option<bool>,
+  pub registration_mode: Option<RegistrationMode>,
+  pub reports_email_admins: Option<bool>,
+  pub updated_at: Option<Option<DateTime<Utc>>>,
+  pub federation_signed_fetch: Option<bool>,
+  pub default_post_listing_mode: Option<PostListingMode>,
+  pub default_post_sort_type: Option<PostSortType>,
+  pub default_comment_sort_type: Option<CommentSortType>,
+  pub oauth_registration: Option<bool>,
+  pub post_upvotes: Option<FederationMode>,
+  pub post_downvotes: Option<FederationMode>,
+  pub comment_upvotes: Option<FederationMode>,
+  pub comment_downvotes: Option<FederationMode>,
+  pub default_post_time_range_seconds: Option<Option<i32>>,
+  pub nsfw_content_disallowed: Option<bool>,
+  pub email_notifications_disabled: Option<bool>,
+  pub suggested_multi_community_id: Option<Option<MultiCommunityId>>,
+  pub default_items_per_page: Option<i32>,
+  pub image_mode: Option<ImageMode>,
+  pub image_proxy_bypass_domains: Option<Option<String>>,
+  pub image_upload_timeout_seconds: Option<i32>,
+  pub image_max_thumbnail_size: Option<i32>,
+  pub image_max_avatar_size: Option<i32>,
+  pub image_max_banner_size: Option<i32>,
+  pub image_max_upload_size: Option<i32>,
+  pub image_allow_video_uploads: Option<bool>,
+  pub image_upload_disabled: Option<bool>,
+  pub max_invites_per_user_allowed: Option<i32>,
+}

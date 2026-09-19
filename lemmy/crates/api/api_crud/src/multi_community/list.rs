@@ -1,0 +1,38 @@
+use activitypub_federation::config::Data;
+use actix_web::web::{Json, Query};
+use lemmy_api_utils::{context::LemmyContext, utils::check_private_instance};
+use lemmy_db_views_community::{
+  MultiCommunityView,
+  api::ListMultiCommunities,
+  impls::MultiCommunityQuery,
+};
+use lemmy_db_views_local_user::LocalUserView;
+use lemmy_db_views_site::SiteView;
+use lemmy_diesel_utils::pagination::PagedResponse;
+use lemmy_utils::error::LemmyResult;
+
+pub async fn list_multi_communities(
+  Query(data): Query<ListMultiCommunities>,
+  context: Data<LemmyContext>,
+  local_user_view: Option<LocalUserView>,
+) -> LemmyResult<Json<PagedResponse<MultiCommunityView>>> {
+  let SiteView { local_site, .. } = SiteView::read_local(&mut context.pool()).await?;
+  check_private_instance(&local_user_view, &local_site)?;
+
+  let res = MultiCommunityQuery {
+    listing_type: data.type_,
+    sort: data.sort,
+    creator_id: data.creator_id,
+    local_user: local_user_view.map(|l| l.local_user).as_ref(),
+    time_range_seconds: data.time_range_seconds,
+    search_term: data.search_term,
+    search_title_only: data.search_title_only,
+    page_cursor: data.page_cursor,
+    limit: data.limit,
+    no_limit: None,
+  }
+  .list(&mut context.pool())
+  .await?;
+
+  Ok(Json(res))
+}

@@ -1,0 +1,287 @@
+import { Component, InfernoNode } from "inferno";
+import {
+  AddAdmin,
+  AddModToCommunity,
+  BanFromCommunity,
+  BanPerson,
+  BlockCommunity,
+  BlockPerson,
+  CreatePostLike,
+  CreatePostReport,
+  DeletePost,
+  EditPost,
+  FeaturePost,
+  HidePost,
+  Language,
+  LocalSite,
+  LockPost,
+  MarkPostAsRead,
+  MyUserInfo,
+  NotePerson,
+  PersonView,
+  PostListingMode,
+  PostView,
+  PurgePerson,
+  PurgePost,
+  RemovePost,
+  SavePost,
+  CommunityTag,
+  TransferCommunity,
+  ModEditPost,
+  CreatePostWarning,
+} from "lemmy-js-client";
+import {
+  ShowBodyType,
+  ShowCrossPostsType,
+  ShowMarkReadType,
+} from "@utils/types";
+import { tippyMixin } from "../mixins/tippy-mixin";
+import { PostForm } from "./post-form";
+import { PostListingList } from "./post-listing-list";
+import { PostListingCard } from "./post-listing-card";
+import { masonryUpdate } from "@utils/browser";
+import { RouterContext } from "inferno-router";
+import Viewer from "viewerjs";
+import { viewerJsFullSizeImageUrl } from "@components/common/pictrs-image";
+
+type PostListingState = {
+  showEdit: boolean;
+};
+
+type PostListingProps = {
+  postView: PostView;
+  postListingMode: PostListingMode;
+  crossPosts: PostView[];
+  admins: PersonView[];
+  allLanguages: Language[];
+  communityTags: CommunityTag[];
+  siteLanguages: number[];
+  showCommunity: boolean;
+  showBody: ShowBodyType;
+  hideImage: boolean;
+  enableNsfw: boolean;
+  viewOnly: boolean;
+  showAdultConsentModal: boolean;
+  myUserInfo: MyUserInfo | undefined;
+  localSite: LocalSite;
+  showCrossPosts: ShowCrossPostsType;
+  showMarkRead: ShowMarkReadType;
+  disableAutoMarkAsRead: boolean;
+  editLoading: boolean;
+  notificationRead?: boolean;
+  markReadLoading: boolean;
+  voteLoading: boolean;
+  topBorder: boolean;
+  mutePersonName: boolean;
+  muteCommunityName: boolean;
+  hideAvatar: boolean;
+  onPostEdit: (form: EditPost) => void;
+  onPostModEdit: (form: ModEditPost) => void;
+  onPostVote: (form: CreatePostLike) => void;
+  onPostReport: (form: CreatePostReport) => void;
+  onBlockPerson: (form: BlockPerson) => void;
+  onBlockCommunity: (form: BlockCommunity) => void;
+  onLockPost: (form: LockPost) => void;
+  onWarnPost: (form: CreatePostWarning) => void;
+  onDeletePost: (form: DeletePost) => void;
+  onRemovePost: (form: RemovePost) => void;
+  onSavePost: (form: SavePost) => void;
+  onFeaturePost: (form: FeaturePost) => void;
+  onPurgePerson: (form: PurgePerson) => void;
+  onPurgePost: (form: PurgePost) => void;
+  onBanPersonFromCommunity: (form: BanFromCommunity) => void;
+  onBanPerson: (form: BanPerson) => void;
+  onAddModToCommunity: (form: AddModToCommunity) => void;
+  onAddAdmin: (form: AddAdmin) => void;
+  onTransferCommunity: (form: TransferCommunity) => void;
+  onHidePost: (form: HidePost) => void;
+  onPersonNote: (form: NotePerson) => void;
+  onScrollIntoCommentsClick: (e: MouseEvent) => void;
+  onMarkPostAsRead: (form: MarkPostAsRead) => void;
+};
+
+@tippyMixin
+export class PostListing extends Component<PostListingProps, PostListingState> {
+  state: PostListingState = {
+    showEdit: false,
+  };
+
+  unlisten = () => {};
+
+  componentWillMount() {
+    // Leave edit mode on navigation
+    const context = this.context as RouterContext;
+    this.unlisten = context.router.history.listen(() => {
+      if (this.state.showEdit) {
+        this.setState({ showEdit: false });
+      }
+    });
+  }
+
+  componentWillUnmount() {
+    this.unlisten();
+    this.unloadViewerJs();
+  }
+
+  componentWillReceiveProps(
+    nextProps: Readonly<{ children?: InfernoNode } & PostListingProps>,
+  ) {
+    // Close the post edit form if it goes from loading to not.
+    if (this.props.editLoading && !nextProps.editLoading) {
+      this.setState({ showEdit: false });
+    }
+  }
+
+  viewerjss: Viewer[] = [];
+
+  loadViewerJsForImages() {
+    this.unloadViewerJs();
+    const id = this.props.postView.post.id;
+    const images = document.querySelectorAll(
+      `#post-listing-${id} > div > article > div > article > div > div > p > img`,
+    );
+    // Load the image viewer for every image in the post body
+    images.forEach((i: HTMLElement) => {
+      this.viewerjss.push(
+        new Viewer(i, {
+          url: (image: { src: string }) => viewerJsFullSizeImageUrl(image),
+          toolbar: false,
+        }),
+      );
+    });
+  }
+
+  unloadViewerJs() {
+    this.viewerjss.forEach(v => v.destroy());
+    this.viewerjss = [];
+  }
+
+  componentDidMount() {
+    this.loadViewerJsForImages();
+  }
+
+  componentDidUpdate() {
+    this.loadViewerJsForImages();
+  }
+
+  render() {
+    const p = this.props;
+    return (
+      <div
+        id={`post-listing-${p.postView.post.id}`}
+        className="post-listing my-2"
+      >
+        {!this.state.showEdit ? (
+          this.renderListingMode()
+        ) : (
+          <PostForm
+            post_view={p.postView}
+            selectedCommunityTags={this.props.communityTags}
+            crossPosts={p.crossPosts}
+            admins={p.admins}
+            enableNsfw={p.enableNsfw}
+            showAdultConsentModal={p.showAdultConsentModal}
+            allLanguages={p.allLanguages}
+            siteLanguages={p.siteLanguages}
+            loading={p.editLoading}
+            isNsfwCommunity={p.postView.community.nsfw}
+            myUserInfo={p.myUserInfo}
+            localSite={p.localSite}
+            onEdit={p.onPostEdit}
+            onModEdit={p.onPostModEdit}
+            onCancel={() => handleEditCancel(this)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  renderListingMode() {
+    const p = this.props;
+    switch (p.postListingMode) {
+      case "list":
+        return (
+          <PostListingList
+            postView={p.postView}
+            crossPosts={p.crossPosts}
+            allLanguages={p.allLanguages}
+            showCommunity={p.showCommunity}
+            hideImage={p.hideImage}
+            viewOnly={p.viewOnly}
+            myUserInfo={p.myUserInfo}
+            localSite={p.localSite}
+            showCrossPosts={p.showCrossPosts}
+            voteLoading={p.voteLoading}
+            mutePersonName={p.mutePersonName}
+            muteCommunityName={p.muteCommunityName}
+            hideAvatar={p.hideAvatar}
+            onPostVote={p.onPostVote}
+            onScrollIntoCommentsClick={p.onScrollIntoCommentsClick}
+          />
+        );
+      case "card":
+      case "small_card":
+        return (
+          <PostListingCard
+            smallCard={p.postListingMode === "small_card"}
+            postView={p.postView}
+            crossPosts={p.crossPosts}
+            admins={p.admins}
+            allLanguages={p.allLanguages}
+            siteLanguages={p.siteLanguages}
+            showCommunity={p.showCommunity}
+            showBody={p.showBody}
+            hideImage={p.hideImage}
+            enableNsfw={p.enableNsfw}
+            viewOnly={p.viewOnly}
+            topBorder={p.topBorder}
+            showAdultConsentModal={p.showAdultConsentModal}
+            myUserInfo={p.myUserInfo}
+            localSite={p.localSite}
+            showCrossPosts={p.showCrossPosts}
+            showMarkRead={p.showMarkRead}
+            disableAutoMarkAsRead={p.disableAutoMarkAsRead}
+            editLoading={p.editLoading}
+            notificationRead={p.notificationRead}
+            markReadLoading={p.markReadLoading}
+            voteLoading={p.voteLoading}
+            mutePersonName={p.mutePersonName}
+            muteCommunityName={p.muteCommunityName}
+            hideAvatar={p.hideAvatar}
+            onEditClick={() => handleEditClick(this)}
+            onPostVote={p.onPostVote}
+            onPostReport={p.onPostReport}
+            onBlockPerson={p.onBlockPerson}
+            onBlockCommunity={p.onBlockCommunity}
+            onLockPost={p.onLockPost}
+            onWarnPost={p.onWarnPost}
+            onDeletePost={p.onDeletePost}
+            onRemovePost={p.onRemovePost}
+            onSavePost={p.onSavePost}
+            onFeaturePost={p.onFeaturePost}
+            onPurgePerson={p.onPurgePerson}
+            onPurgePost={p.onPurgePost}
+            onBanPersonFromCommunity={p.onBanPersonFromCommunity}
+            onBanPerson={p.onBanPerson}
+            onAddModToCommunity={p.onAddModToCommunity}
+            onAddAdmin={p.onAddAdmin}
+            onTransferCommunity={p.onTransferCommunity}
+            onHidePost={p.onHidePost}
+            onPersonNote={p.onPersonNote}
+            onMarkPostAsRead={p.onMarkPostAsRead}
+            onScrollIntoCommentsClick={p.onScrollIntoCommentsClick}
+          />
+        );
+    }
+  }
+}
+
+async function handleEditClick(i: PostListing) {
+  i.setState({ showEdit: true });
+  await masonryUpdate();
+}
+
+async function handleEditCancel(i: PostListing) {
+  i.setState({ showEdit: false });
+  await masonryUpdate();
+}

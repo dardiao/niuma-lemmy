@@ -1,0 +1,56 @@
+# 生产反向代理。Caddy 会自动为 {$LEMMY_DOMAIN} 申请并续期 Let's Encrypt 证书，
+# 并把 http 跳转到 https。路径路由规则和开发用的 nginx.conf 保持一致。
+{
+	email {$ACME_EMAIL}
+	# 证书和账号数据放在 caddy_data 卷里，重建容器不会丢
+}
+
+{$LEMMY_DOMAIN} {
+	encode zstd gzip
+
+	# 其它实例来抓 ActivityPub 时带的是 JSON-LD 的 Accept 头，但 URL 看起来像普通页面，
+	# 这些请求必须转发到后端而不是前端。
+	@activitypub header_regexp Accept "application/(activity|ld)\+json"
+	handle @activitypub {
+		reverse_proxy lemmy:8536 {
+			header_up Host {host}
+		}
+	}
+
+	handle /api/* {
+		reverse_proxy lemmy:8536 {
+			header_up Host {host}
+		}
+	}
+	handle /pictrs/* {
+		reverse_proxy pictrs:8080
+	}
+	handle /feeds/* {
+		reverse_proxy lemmy:8536 {
+			header_up Host {host}
+		}
+	}
+	handle /nodeinfo/* {
+		reverse_proxy lemmy:8536 {
+			header_up Host {host}
+		}
+	}
+	handle /version {
+		reverse_proxy lemmy:8536 {
+			header_up Host {host}
+		}
+	}
+	# webfinger / nodeinfo / host-meta 等联邦发现接口
+	handle /.well-known/* {
+		reverse_proxy lemmy:8536 {
+			header_up Host {host}
+		}
+	}
+
+	# 其余都是前端
+	handle {
+		reverse_proxy lemmy-ui:1234 {
+			header_up Host {host}
+		}
+	}
+}

@@ -1,0 +1,27 @@
+From b3189be996cbe4be35dda479f339b8f185b8f32b Mon Sep 17 00:00:00 2001
+From: dardiao <xn--6s1a@outlook.com>
+Date: Sat, 19 Sep 2026 22:38:52 +0800
+Subject: [PATCH 5/7] local: let the deployment set a security contact for
+ lemmy-ui
+
+---
+ docker/docker-compose.yml | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/docker/docker-compose.yml b/docker/docker-compose.yml
+index b4167c2..779f6ab 100644
+--- a/docker/docker-compose.yml
++++ b/docker/docker-compose.yml
+@@ -89,6 +89,9 @@ services:
+       # used for share/copy-post links; without it the request host is the internal
+       # `lemmy-ui` hostname behind the proxy
+       - LEMMY_UI_FRONTEND=${LEMMY_UI_PUBLIC_URL:-localhost:1236}
++      # optional: uri for security reports, e.g. mailto:you@example.org. Unset means
++      # /.well-known/security.txt carries no Contact field.
++      - LEMMY_UI_SECURITY_CONTACT=${LEMMY_UI_SECURITY_CONTACT:-}
+       # set the outside hostname here
+       - LEMMY_UI_HTTPS=false
+       - LEMMY_UI_ERUDA=true
+-- 
+2.54.0
+

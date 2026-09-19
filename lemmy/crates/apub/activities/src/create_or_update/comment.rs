@@ -1,0 +1,156 @@
+use crate::{
+  activity_lists::AnnouncableActivities,
+  community::send_activity_in_community,
+  create_or_update::{parse_apub_mentions, tagged_user_inboxes},
+  generate_activity_id,
+  protocol::{CreateOrUpdateType, create_or_update::note::CreateOrUpdateNote},
+};
+use activitypub_federation::{
+  config::Data,
+  protocol::verification::{verify_domains_match, verify_urls_match},
+  traits::{Activity, Object},
+};
+use lemmy_api_utils::{
+  context::LemmyContext,
+  notify::NotifyData,
+  utils::{
+    check_comment_deleted_or_removed,
+    check_community_deleted_removed,
+    check_post_deleted_or_removed,
+  },
+};
+use lemmy_apub_objects::{
+  objects::{comment::ApubComment, community::ApubCommunity, person::ApubPerson},
+  utils::{
+    check_is_mod_or_admin,
+    functions::{generate_to, verify_person_in_community, verify_visibility},
+    protocol::InCommunity,
+  },
+};
+use lemmy_db_schema::{
+  source::{
+    comment::{Comment, CommentActions, CommentLikeForm},
+    community::Community,
+    person::Person,
+    post::Post,
+  },
+  traits::Likeable,
+};
+use lemmy_db_schema_file::PersonId;
+use lemmy_db_views_site::SiteView;
+use lemmy_diesel_utils::traits::Crud;
+use lemmy_utils::error::{LemmyError, LemmyResult};
+use serde_json::{from_value, to_value};
+use url::Url;
+
+impl CreateOrUpdateNote {
+  pub(crate) async fn send(
+    comment: Comment,
+    person_id: PersonId,
+    kind: CreateOrUpdateType,
+    context: Data<LemmyContext>,
+  ) -> LemmyResult<()> {
+    // TODO: might be helpful to add a comment method to retrieve community directly
+    let post_id = comment.post_id;
+    let post = Post::read(&mut context.pool(), post_id).await?;
+    let community_id = post.community_id;
+    let person: ApubPerson = Person::read(&mut context.pool(), person_id).await?.into();
+    let community: ApubCommunity = Community::read(&mut context.pool(), community_id)
+      .await?
+      .into();
+
+    let id = generate_activity_id(kind.clone(), &context)?;
+    let note = ApubComment(comment).into_json(&context).await?;
+
+    let create_or_update = CreateOrUpdateNote {
+      actor: person.id().clone().into(),
+      to: generate_to(&community)?,
+      cc: note.cc.clone(),
+      tag: note.tag.clone(),
+      object: note,
+      kind,
+      id: id.clone(),
+      audience: Some(community.ap_id.clone().into()),
+    };
+
+    let inboxes = tagged_user_inboxes(&create_or_update.tag, &context).await?;
+
+    // AnnouncableActivities doesnt contain Comment activity but only NoteWrapper,
+    // to be able to handle both comment and private message. So to send this out we need
+    // to convert this to NoteWrapper, by serializing and then deserializing again.
+    let converted = from_value(to_value(create_or_update)?)?;
+    let activity = AnnouncableActivities::CreateOrUpdateNoteWrapper(converted);
+    send_activity_in_community(activity, &person, &community, inboxes, false, &context).await
+  }
+}
+
+#[async_trait::async_trait]
+impl Activity for CreateOrUpdateNote {
+  type DataType = LemmyContext;
+  type Error = LemmyError;
+
+  fn id(&self) -> &Url {
+    &self.id
+  }
+
+  fn actor(&self) -> &Url {
+    self.actor.inner()
+  }
+
+  async fn verify(&self, context: &Data<Self::DataType>) -> LemmyResult<()> {
+    let (post, parent_comment) = self.object.get_parents(context).await?;
+    let community = self.community(context).await?;
+    verify_visibility(&self.to, &self.cc, &community)?;
+
+    verify_person_in_community(&self.actor, &community, context).await?;
+    verify_domains_match(self.actor.inner(), self.object.id.inner())?;
+    check_community_deleted_removed(&community)?;
+    check_post_deleted_or_removed(&post)?;
+    if let Some(parent_comment) = parent_comment {
+      check_comment_deleted_or_removed(&parent_comment.0)?;
+    }
+    verify_urls_match(self.actor.inner(), self.object.attributed_to.inner())?;
+
+    ApubComment::verify(&self.object, self.actor.inner(), context).await?;
+    Ok(())
+  }
+
+  async fn receive(self, context: &Data<Self::DataType>) -> LemmyResult<()> {
+    let site_view = SiteView::read_local(&mut context.pool()).await?;
+
+    // Need to do this check here instead of Note::from_json because we need the person who
+    // send the activity, not the comment author.
+    let existing_comment = self.object.id.dereference_local(context).await.ok();
+    let (post, _) = self.object.get_parents(context).await?;
+    if let (Some(distinguished), Some(existing_comment)) =
+      (self.object.distinguished, existing_comment)
+      && distinguished != existing_comment.distinguished
+    {
+      let creator = self.actor.dereference(context).await?;
+      check_is_mod_or_admin(&mut context.pool(), creator.id, post.community_id).await?;
+    }
+
+    let comment = ApubComment::from_json(self.object, context).await?;
+
+    // author likes their own comment by default
+    let like_form = CommentLikeForm::new(comment.id, comment.creator_id, Some(true));
+    CommentActions::like(&mut context.pool(), &like_form).await?;
+
+    // Calculate initial hot_rank
+    Comment::update_hot_rank(&mut context.pool(), comment.id).await?;
+
+    let do_send_email =
+      self.kind == CreateOrUpdateType::Create && !site_view.local_site.email_notifications_disabled;
+    let actor = self.actor.dereference(context).await?;
+
+    let community = Community::read(&mut context.pool(), post.community_id).await?;
+    NotifyData {
+      comment: Some(comment.0),
+      do_send_email,
+      apub_mentions: Some(parse_apub_mentions(&self.tag, context).await?),
+      ..NotifyData::new(post.0, actor.0, community)
+    }
+    .send(context);
+    Ok(())
+  }
+}

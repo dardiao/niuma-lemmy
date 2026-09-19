@@ -1,0 +1,20 @@
+{
+  hostname: lemmy-epsilon:8581
+  port: 8581
+  tls_enabled: false
+  setup: {
+    admin_username: lemmy_epsilon
+    admin_password: lemmylemmy
+    site_name: lemmy-epsilon
+  }
+  database: {
+    connection: "postgres://lemmy:password@postgres_epsilon:5432/lemmy"
+  }
+  pictrs: {
+    api_key: "my-pictrs-key"
+  }
+  plugins: [{
+    file: "https://github.com/LemmyNet/lemmy-plugins/releases/download/0.1.1/go_replace_words.wasm"
+      hash: "37cdc01a3ff26eef578b668c6cc57fc06649deddb3a92cb6bae8e79b4e60fe12"
+  }]
+}

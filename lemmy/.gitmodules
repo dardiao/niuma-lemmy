@@ -1,0 +1,4 @@
+[submodule "crates/email/translations"]
+	path = crates/email/translations
+	url = https://github.com/LemmyNet/lemmy-translations.git
+        branch = main

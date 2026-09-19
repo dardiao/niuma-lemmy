@@ -1,0 +1,117 @@
+import { randomStr } from "@utils/helpers";
+import { Icon } from "./icon";
+import classNames from "classnames";
+import { NoOptionI18nKeys } from "i18next";
+import { I18NextService } from "@services/I18NextService";
+
+type ChipCheckboxProps = {
+  option: NoOptionI18nKeys;
+  isChecked: boolean;
+  onCheck: (checked: boolean) => void;
+  expander: boolean;
+  className?: string;
+  disabled?: boolean;
+  description?: NoOptionI18nKeys;
+};
+
+function ChipCheckbox({
+  option,
+  isChecked,
+  onCheck,
+  expander,
+  className,
+  disabled,
+  description,
+}: ChipCheckboxProps) {
+  const id = randomStr();
+  const icon = isChecked
+    ? expander
+      ? "minus-square"
+      : "check"
+    : expander
+      ? "plus-square"
+      : "x";
+  return (
+    <>
+      <input
+        type="checkbox"
+        className={"btn-check visually-hidden"}
+        id={`filter-check-${id}`}
+        checked={isChecked}
+        disabled={disabled}
+        onChange={e => onCheck(e.target.checked)}
+      />
+      <label
+        className={classNames(
+          "btn btn-sm btn-light border-light-subtle",
+          className,
+        )}
+        for={`filter-check-${id}`}
+      >
+        <Icon icon={icon} classes="icon-inline me-1" />
+        {I18NextService.i18n.t(option)}
+      </label>
+      {description && (
+        <div className="form-text text-muted mb-1">
+          {I18NextService.i18n.t(description)}
+        </div>
+      )}
+    </>
+  );
+}
+
+type FilterChipCheckboxProps = {
+  option: NoOptionI18nKeys;
+  isChecked: boolean;
+  onCheck: (checked: boolean) => void;
+  className?: string;
+  disabled?: boolean;
+  description?: NoOptionI18nKeys;
+};
+
+export function FilterChipCheckbox({
+  option,
+  isChecked,
+  className,
+  onCheck,
+  disabled,
+  description,
+}: FilterChipCheckboxProps) {
+  return (
+    <ChipCheckbox
+      option={option}
+      isChecked={isChecked}
+      onCheck={onCheck}
+      expander={false}
+      disabled={disabled}
+      className={className}
+      description={description}
+    />
+  );
+}
+
+type ExpandChipCheckboxProps = {
+  option: NoOptionI18nKeys;
+  isChecked: boolean;
+  onCheck: (checked: boolean) => void;
+  className?: string;
+  disabled?: boolean;
+};
+export function ExpandChipCheckbox({
+  option,
+  isChecked,
+  className,
+  onCheck,
+  disabled,
+}: ExpandChipCheckboxProps) {
+  return (
+    <ChipCheckbox
+      option={option}
+      isChecked={isChecked}
+      onCheck={onCheck}
+      expander
+      disabled={disabled}
+      className={className}
+    />
+  );
+}

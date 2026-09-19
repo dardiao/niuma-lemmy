@@ -1,0 +1,59 @@
+[package]
+name = "lemmy_db_schema"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "lemmy_db_schema"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[features]
+full = [
+  "lemmy_utils/full",
+  "diesel",
+  "bcrypt",
+  "lemmy_utils",
+  "serde_json",
+  "diesel_ltree",
+  "diesel-async",
+  "diesel-uplete",
+  "tokio",
+  "i-love-jesus",
+  "lemmy_db_schema_file/full",
+  "lemmy_diesel_utils/full",
+]
+ts-rs = ["dep:ts-rs"]
+
+[dependencies]
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_with = { workspace = true }
+url = { workspace = true }
+strum = { workspace = true }
+serde_json = { workspace = true, optional = true }
+lemmy_utils = { workspace = true, optional = true }
+lemmy_db_schema_file = { workspace = true }
+lemmy_diesel_utils = { workspace = true }
+bcrypt = { workspace = true, optional = true }
+diesel = { workspace = true, optional = true }
+diesel-async = { workspace = true, optional = true }
+diesel-uplete = { workspace = true, optional = true }
+diesel_ltree = { workspace = true, optional = true }
+ts-rs = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+i-love-jesus = { workspace = true, optional = true }
+derive-new.workspace = true
+
+[dev-dependencies]
+serial_test = { workspace = true }
+pretty_assertions = { workspace = true }

@@ -1,0 +1,1207 @@
+import {
+  commentsToFlatNodes,
+  commentToFlatNode,
+  communityToChoice,
+  enableNsfw,
+  handleWarnComment,
+  handleWarnPost,
+  personToChoice,
+  searchCommunities,
+  searchUsers,
+  setIsoData,
+  showLocal,
+} from "@utils/app";
+import { scrollMixin } from "./mixins/scroll-mixin";
+import {
+  debounce,
+  getIdFromString,
+  getQueryParams,
+  getQueryString,
+  resourcesSettled,
+} from "@utils/helpers";
+import type { IsoData, QueryParams } from "@utils/types";
+import { Choice, RouteDataResponse } from "@utils/types";
+import { Component, createRef, FormEvent, InfernoNode } from "inferno";
+import {
+  CommunityView,
+  GetCommunity,
+  GetCommunityResponse,
+  GetPersonDetails,
+  GetPersonDetailsResponse,
+  GetSiteResponse,
+  LemmyHttp,
+  PagedResponse,
+  ListingType,
+  PersonView,
+  PostView,
+  Search as SearchForm,
+  SearchResponse,
+  SearchType,
+  PaginationCursor,
+  MyUserInfo,
+  CommentView,
+  MultiCommunityView,
+  CommunitySortType,
+} from "lemmy-js-client";
+import { fetchLimit } from "@utils/config";
+import { InitialFetchRequest } from "@utils/types";
+import { FirstLoadService, I18NextService } from "../services";
+import {
+  EMPTY_REQUEST,
+  HttpService,
+  LOADING_REQUEST,
+  RequestState,
+  wrapClient,
+} from "../services/HttpService";
+import { CommentNodes } from "./comment/comment-nodes";
+import { HtmlTags } from "./common/html-tags";
+import { Icon, Spinner } from "./common/icon";
+import { PersonListing } from "./person/person-listing";
+import { PostListing } from "./post/post-listing";
+import { getHttpBaseInternal } from "../utils/env";
+import { RouteComponentProps, RouterContext } from "inferno-router";
+import { IRoutePropsWithFetch } from "@utils/routes";
+import { isBrowser } from "@utils/browser";
+import { UserBadges } from "./common/user-badges";
+import { CommunityBadges, MultiCommunityBadges } from "./common/badges";
+import { CommunityLink } from "./community/community-link";
+import { MultiCommunityLink } from "./multi-community/multi-community-link";
+import { Action } from "history";
+import { ListingTypeDropdown } from "./common/listing-type-dropdown";
+import { SearchTypeDropdown } from "./common/search-type-dropdown";
+import { FilterChipCheckbox } from "./common/filter-chip-checkbox";
+import { NoOptionI18nKeys } from "i18next";
+import { FilterChipSelect } from "./common/filter-chip-select";
+
+interface SearchProps {
+  q?: string;
+  type: SearchType;
+  listingType: ListingType;
+  titleOnly: boolean;
+  postUrlOnly: boolean;
+  communityId?: number;
+  creatorId?: number;
+  cursor?: PaginationCursor;
+}
+
+type SearchData = RouteDataResponse<{
+  communityResponse: GetCommunityResponse;
+  listCommunitiesResponse: PagedResponse<CommunityView>;
+  creatorDetailsResponse: GetPersonDetailsResponse;
+  searchResponse: SearchResponse;
+}>;
+
+interface SearchState {
+  searchRes: RequestState<SearchResponse>;
+  siteRes: GetSiteResponse;
+  communitySearchOptions: Choice[];
+  creatorSearchOptions: Choice[];
+  searchCreatorLoading: boolean;
+  searchCommunitiesLoading: boolean;
+  isIsomorphic: boolean;
+}
+
+const defaultSearchType: SearchType = "all";
+const defaultListingType: ListingType = "all";
+const defaultCommunitySortType: CommunitySortType = "hot";
+
+export function getSearchQueryParams(source?: string): SearchProps {
+  return getQueryParams<SearchProps>(
+    {
+      q: getSearchQueryFromQuery,
+      type: getSearchTypeFromQuery,
+      listingType: getListingTypeFromQuery,
+      titleOnly: getTitleOnlyFromQuery,
+      postUrlOnly: getPostUrlOnlyFromQuery,
+      communityId: getIdFromString,
+      creatorId: getIdFromString,
+      cursor: (cursor?: string) => cursor,
+    },
+    source,
+  );
+}
+
+const getSearchQueryFromQuery = (q?: string): string | undefined => q;
+
+function getSearchTypeFromQuery(type_?: string): SearchType {
+  return type_ ? (type_ as SearchType) : defaultSearchType;
+}
+
+function getListingTypeFromQuery(listingType?: string): ListingType {
+  return listingType ? (listingType as ListingType) : defaultListingType;
+}
+
+const getTitleOnlyFromQuery = (titleOnly?: string): boolean =>
+  titleOnly?.toLowerCase() === "true";
+
+const getPostUrlOnlyFromQuery = (postUrlOnly?: string): boolean =>
+  postUrlOnly?.toLowerCase() === "true";
+
+const Filter = ({
+  title,
+  options,
+  onChange,
+  onSearch,
+  value,
+}: {
+  title: NoOptionI18nKeys;
+  options: Choice[];
+  onSearch: (text: string) => void;
+  onChange: (choices: Choice[]) => void;
+  value?: number | null;
+}) => {
+  return (
+    <FilterChipSelect
+      label={title}
+      multiple={false}
+      allOptions={options}
+      selectedOptions={value ? [value.toString()] : []}
+      onSearch={onSearch}
+      onSelect={onChange}
+    />
+  );
+};
+
+const communityListing = (
+  communities: CommunityView[],
+  myUserInfo: MyUserInfo | undefined,
+  showHeader: boolean = true,
+) => {
+  return (
+    communities.length > 0 && (
+      <>
+        {showHeader && <h3>{I18NextService.i18n.t("communities")}</h3>}
+        {communities.map(c => (
+          <div>
+            <CommunityLink
+              community={c.community}
+              myUserInfo={myUserInfo}
+              muted={false}
+            />
+            <CommunityBadges
+              className="ms-2 d-inline-flex"
+              community={c.community}
+              lessBadges
+            />
+          </div>
+        ))}
+        <hr className="border m-2" />
+      </>
+    )
+  );
+};
+
+const multiCommunityListing = (
+  multiCommunities: MultiCommunityView[],
+  myUserInfo: MyUserInfo | undefined,
+  showHeader: boolean = true,
+) => {
+  return (
+    multiCommunities.length > 0 && (
+      <>
+        {showHeader && <h3>{I18NextService.i18n.t("multi_communities")}</h3>}
+        {multiCommunities.map(m => (
+          <div>
+            <MultiCommunityLink
+              multiCommunity={m.multi}
+              myUserInfo={myUserInfo}
+            />
+            <MultiCommunityBadges
+              className="ms-2 d-inline-flex"
+              multiCommunity={m.multi}
+              lessBadges
+            />
+          </div>
+        ))}
+        <hr className="border m-2" />
+      </>
+    )
+  );
+};
+
+const personListing = (
+  persons: PersonView[],
+  myUserInfo: MyUserInfo | undefined,
+  showHeader: boolean = true,
+) => {
+  return (
+    persons.length > 0 && (
+      <>
+        {showHeader && <h3>{I18NextService.i18n.t("users")}</h3>}
+        {persons.map(p => (
+          <div>
+            <PersonListing
+              person={p.person}
+              banned={p.banned}
+              showApubName
+              myUserInfo={myUserInfo}
+              muted={false}
+            />
+            <UserBadges
+              classNames="ms-1"
+              isBanned={p.banned}
+              myUserInfo={myUserInfo}
+              personActions={p.person_actions}
+              creator={p.person}
+              showCounts
+            />
+          </div>
+        ))}
+        <hr className="border m-2" />
+      </>
+    )
+  );
+};
+
+const postListing = (
+  posts: PostView[],
+  isoData: IsoData,
+  showHeader: boolean = true,
+) => {
+  return (
+    posts.length > 0 && (
+      <>
+        {showHeader && <h3>{I18NextService.i18n.t("posts")}</h3>}
+        {posts.map(post_view => (
+          <div>
+            <PostListing
+              key={post_view.post.id}
+              postView={post_view}
+              showCrossPosts="show_separately"
+              showCommunity
+              myUserInfo={isoData.myUserInfo}
+              localSite={isoData.siteRes.site_view.local_site}
+              showAdultConsentModal={isoData.showAdultConsentModal}
+              enableNsfw={enableNsfw(isoData.siteRes)}
+              allLanguages={isoData.siteRes.all_languages}
+              siteLanguages={isoData.siteRes.discussion_languages}
+              admins={isoData.siteRes.admins}
+              postListingMode="list"
+              viewOnly
+              topBorder={false}
+              crossPosts={[]}
+              communityTags={[]}
+              showBody={"hidden"}
+              hideImage={false}
+              showMarkRead="hide"
+              disableAutoMarkAsRead={false}
+              editLoading={false}
+              markReadLoading={false}
+              voteLoading={false}
+              mutePersonName={false}
+              muteCommunityName
+              hideAvatar={false}
+              // All of these are unused, since its view only
+              onPostEdit={() => {}}
+              onPostModEdit={() => {}}
+              onPostVote={() => {}}
+              onPostReport={() => {}}
+              onBlockPerson={() => {}}
+              onBlockCommunity={() => {}}
+              onLockPost={() => {}}
+              onWarnPost={form => handleWarnPost(form)}
+              onDeletePost={() => {}}
+              onRemovePost={() => {}}
+              onSavePost={() => {}}
+              onFeaturePost={() => {}}
+              onPurgePerson={() => {}}
+              onPurgePost={() => {}}
+              onBanPersonFromCommunity={() => {}}
+              onBanPerson={() => {}}
+              onAddModToCommunity={() => {}}
+              onAddAdmin={() => {}}
+              onTransferCommunity={() => {}}
+              onMarkPostAsRead={() => {}}
+              onHidePost={() => {}}
+              onPersonNote={() => {}}
+              onScrollIntoCommentsClick={() => {}}
+            />
+          </div>
+        ))}
+        <hr className="border m-2" />
+      </>
+    )
+  );
+};
+
+const commentListing = (
+  comments: CommentView[],
+  isoData: IsoData,
+  showHeader: boolean = true,
+) => {
+  return (
+    comments.length > 0 && (
+      <>
+        {showHeader && <h3>{I18NextService.i18n.t("comments")}</h3>}
+        {comments.map(c => (
+          <div>
+            <CommentNodes
+              key={c.comment.id}
+              nodes={[commentToFlatNode(c)]}
+              viewType={"flat"}
+              showMarkRead={"hide"}
+              showBadgeForPostCreator={false}
+              mutePersonName={false}
+              muteCommunityName
+              hideAvatar={false}
+              createLoading={undefined}
+              editLoading={undefined}
+              markReadLoading={undefined}
+              fetchChildrenLoading={undefined}
+              voteLoading={undefined}
+              viewOnly
+              postLockedOrRemovedOrDeleted
+              isTopLevel
+              noBorder
+              showCommunity
+              myUserInfo={isoData.myUserInfo}
+              localSite={isoData.siteRes.site_view.local_site}
+              allLanguages={isoData.siteRes.all_languages}
+              siteLanguages={isoData.siteRes.discussion_languages}
+              admins={isoData.siteRes.admins}
+              showContext={false}
+              hideImages={false}
+              // All of these are unused, since its viewonly
+              onSaveComment={() => {}}
+              onBlockPerson={() => {}}
+              onBlockCommunity={() => {}}
+              onDeleteComment={() => {}}
+              onRemoveComment={() => {}}
+              onCommentVote={() => {}}
+              onCommentReport={() => {}}
+              onDistinguishComment={() => {}}
+              onAddModToCommunity={() => {}}
+              onAddAdmin={() => {}}
+              onTransferCommunity={() => {}}
+              onPurgeComment={() => {}}
+              onPurgePerson={() => {}}
+              onBanPersonFromCommunity={() => {}}
+              onBanPerson={() => {}}
+              onCreateComment={() => {}}
+              onEditComment={() => {}}
+              onPersonNote={() => {}}
+              onLockComment={() => {}}
+              onWarnComment={form => handleWarnComment(form)}
+              onMarkRead={() => {}}
+              onFetchChildren={() => {}}
+            />
+          </div>
+        ))}
+        <hr className="border m-2" />
+      </>
+    )
+  );
+};
+
+type SearchPathProps = Record<string, never>;
+type SearchRouteProps = RouteComponentProps<SearchPathProps> & SearchProps;
+export type SearchFetchConfig = IRoutePropsWithFetch<
+  SearchData,
+  SearchPathProps,
+  SearchProps
+>;
+
+@scrollMixin
+export class Search extends Component<SearchRouteProps, SearchState> {
+  private isoData = setIsoData<SearchData>(this.context);
+  searchInput = createRef<HTMLInputElement>();
+
+  state: SearchState = {
+    siteRes: this.isoData.siteRes,
+    creatorSearchOptions: [],
+    communitySearchOptions: [],
+    searchRes: EMPTY_REQUEST,
+    searchCreatorLoading: false,
+    searchCommunitiesLoading: false,
+    isIsomorphic: false,
+  };
+
+  loadingSettled() {
+    return resourcesSettled([this.state.searchRes]);
+  }
+
+  constructor(props: SearchRouteProps, context: object) {
+    super(props, context);
+
+    // Only fetch the data if coming from another route
+    if (FirstLoadService.isFirstLoad) {
+      const {
+        communityResponse: communityRes,
+        creatorDetailsResponse: creatorDetailsRes,
+        listCommunitiesResponse: communitiesRes,
+        searchResponse: searchRes,
+      } = this.isoData.routeData;
+
+      this.state.isIsomorphic = true;
+
+      if (creatorDetailsRes?.state === "success") {
+        this.state.creatorSearchOptions =
+          creatorDetailsRes.state === "success"
+            ? [personToChoice(creatorDetailsRes.data.person_view)]
+            : [];
+      }
+
+      if (communitiesRes?.state === "success") {
+        this.state.communitySearchOptions =
+          communitiesRes.data.items.map(communityToChoice);
+      }
+
+      if (communityRes?.state === "success") {
+        this.state.communitySearchOptions.unshift(
+          communityToChoice(communityRes.data.community_view),
+        );
+      }
+
+      if (searchRes?.state === "success") {
+        this.state.searchRes = searchRes;
+      }
+    }
+  }
+
+  async componentWillMount() {
+    if (!this.state.isIsomorphic && isBrowser()) {
+      await this.fetchAll(this.props);
+    }
+  }
+
+  componentDidMount() {
+    if (this.props.history.action !== Action.Pop || this.state.isIsomorphic) {
+      this.searchInput.current?.select();
+    }
+  }
+
+  async componentWillReceiveProps(nextProps: SearchRouteProps) {
+    if (nextProps.communityId !== this.props.communityId) {
+      await this.fetchSelectedCommunity(nextProps);
+    }
+    if (nextProps.creatorId !== this.props.creatorId) {
+      await this.fetchSelectedCreator(nextProps);
+    }
+    await this.search(nextProps);
+  }
+
+  fetchDefaultCommunitiesToken?: symbol;
+  async fetchDefaultCommunities({
+    communityId,
+  }: Pick<SearchRouteProps, "communityId">) {
+    const token = (this.fetchDefaultCommunitiesToken = Symbol());
+    this.setState({
+      searchCommunitiesLoading: true,
+    });
+
+    const res = await HttpService.client.listCommunities({
+      type_: defaultListingType,
+      sort: defaultCommunitySortType,
+      limit: fetchLimit,
+    });
+
+    if (token !== this.fetchDefaultCommunitiesToken) {
+      return;
+    }
+
+    if (res.state === "success") {
+      const retainSelected: false | undefined | Choice =
+        !res.data.items.some(cv => cv.community.id === communityId) &&
+        this.state.communitySearchOptions.find(
+          choice => choice.value === communityId?.toString(),
+        );
+      const choices = res.data.items.map(communityToChoice);
+      this.setState({
+        communitySearchOptions: retainSelected
+          ? [retainSelected, ...choices]
+          : choices,
+      });
+    }
+
+    this.setState({
+      searchCommunitiesLoading: false,
+    });
+  }
+
+  fetchSelectedCommunityToken?: symbol;
+  async fetchSelectedCommunity({
+    communityId,
+  }: Pick<SearchRouteProps, "communityId">) {
+    const token = (this.fetchSelectedCommunityToken = Symbol());
+    const needsSelectedCommunity = () => {
+      return !this.state.communitySearchOptions.some(
+        choice => choice.value === communityId?.toString(),
+      );
+    };
+    if (communityId && needsSelectedCommunity()) {
+      const res = await HttpService.client.getCommunity({ id: communityId });
+      if (
+        res.state === "success" &&
+        needsSelectedCommunity() &&
+        token === this.fetchSelectedCommunityToken
+      ) {
+        this.setState(prev => {
+          prev.communitySearchOptions.unshift(
+            communityToChoice(res.data.community_view),
+          );
+          return prev;
+        });
+      }
+    }
+  }
+
+  fetchSelectedCreatorToken?: symbol;
+  async fetchSelectedCreator({
+    creatorId,
+  }: Pick<SearchRouteProps, "creatorId">) {
+    const token = (this.fetchSelectedCreatorToken = Symbol());
+    const needsSelectedCreator = () => {
+      return !this.state.creatorSearchOptions.some(
+        choice => choice.value === creatorId?.toString(),
+      );
+    };
+
+    if (!creatorId || !needsSelectedCreator()) {
+      return;
+    }
+
+    this.setState({ searchCreatorLoading: true });
+
+    const res = await HttpService.client.getPersonDetails({
+      person_id: creatorId,
+    });
+
+    if (token !== this.fetchSelectedCreatorToken) {
+      return;
+    }
+
+    if (res.state === "success" && needsSelectedCreator()) {
+      this.setState(prev => {
+        prev.creatorSearchOptions.push(personToChoice(res.data.person_view));
+      });
+    }
+
+    this.setState({ searchCreatorLoading: false });
+  }
+
+  async fetchAll(props: SearchRouteProps) {
+    await Promise.all([
+      this.fetchDefaultCommunities(props),
+      this.fetchSelectedCommunity(props),
+      this.fetchSelectedCreator(props),
+      this.search(props),
+    ]);
+  }
+
+  static test: (t: boolean) => 52;
+
+  static fetchInitialData = async ({
+    headers,
+    query: {
+      q: query,
+      type: searchType,
+      listingType: listing_type,
+      titleOnly: title_only,
+      postUrlOnly: post_url_only,
+      communityId: community_id,
+      creatorId: creator_id,
+    },
+  }: InitialFetchRequest<
+    SearchPathProps,
+    SearchProps
+  >): Promise<SearchData> => {
+    const client = wrapClient(
+      new LemmyHttp(getHttpBaseInternal(), { headers }),
+    );
+    let communityResponse: RequestState<GetCommunityResponse> = EMPTY_REQUEST;
+    if (community_id) {
+      const getCommunityForm: GetCommunity = {
+        id: community_id,
+      };
+
+      communityResponse = await client.getCommunity(getCommunityForm);
+    }
+
+    const listCommunitiesResponse = await client.listCommunities({
+      type_: defaultListingType,
+      sort: defaultCommunitySortType,
+      limit: fetchLimit,
+    });
+
+    let creatorDetailsResponse: RequestState<GetPersonDetailsResponse> =
+      EMPTY_REQUEST;
+    if (creator_id) {
+      const getCreatorForm: GetPersonDetails = {
+        person_id: creator_id,
+      };
+
+      creatorDetailsResponse = await client.getPersonDetails(getCreatorForm);
+    }
+
+    let searchResponse: RequestState<SearchResponse> = EMPTY_REQUEST;
+
+    if (query) {
+      const form: SearchForm = {
+        search_term: query,
+        community_id,
+        creator_id,
+        type_: searchType,
+        listing_type,
+        title_only,
+        post_url_only,
+        limit: fetchLimit,
+      };
+
+      searchResponse = await client.search(form);
+    }
+
+    return {
+      communityResponse,
+      creatorDetailsResponse,
+      listCommunitiesResponse,
+      searchResponse,
+    };
+  };
+
+  get documentTitle(): string {
+    const { q } = this.props;
+    const name = this.state.siteRes.site_view.site.name;
+    return `${I18NextService.i18n.t("search")} - ${q ? `${q} - ` : ""}${name}`;
+  }
+
+  render() {
+    const { type } = this.props;
+
+    return (
+      <div className="search container-lg">
+        <HtmlTags
+          title={this.documentTitle}
+          context={this.context as RouterContext}
+        />
+        <h1 className="h4 mb-4">{I18NextService.i18n.t("search")}</h1>
+        {this.selects}
+        {this.searchForm}
+        {this.displayResolve()}
+        {this.displayResults(type)}
+        {this.resultsCount === 0 &&
+          this.state.searchRes.state === "success" && (
+            <span>{I18NextService.i18n.t("no_results")}</span>
+          )}
+      </div>
+    );
+  }
+
+  displayResolve(): InfernoNode | void {
+    const { searchRes: searchResponse } = this.state;
+    if (searchResponse.state === "success" && searchResponse.data.resolve) {
+      const resolve = searchResponse.data.resolve;
+      switch (resolve.type_) {
+        case "post":
+          return postListing([resolve], this.isoData, false);
+        case "comment":
+          return commentListing([resolve], this.isoData, false);
+        case "community":
+          return communityListing([resolve], this.isoData.myUserInfo, false);
+        case "person":
+          return personListing([resolve], this.isoData.myUserInfo, false);
+        case "multi_community":
+          return multiCommunityListing(
+            [resolve],
+            this.isoData.myUserInfo,
+            false,
+          );
+      }
+    }
+  }
+
+  displayResults(type: SearchType) {
+    switch (type) {
+      case "all":
+        return this.all;
+      case "comments":
+        return this.comments;
+      case "posts":
+        return this.posts;
+      case "communities":
+        return this.communities;
+      case "users":
+        return this.users;
+      case "multi_communities":
+        return this.multiCommunities;
+    }
+  }
+
+  get searchForm() {
+    const context = this.context as RouterContext;
+    return (
+      <form
+        className="row gx-2 gy-3"
+        onSubmit={e => handleSearchSubmit(this, e)}
+      >
+        <div className="col-auto flex-grow-1 flex-sm-grow-0">
+          {/* key is necessary for defaultValue to update when props.q changes,
+              e.g. back button. */}
+          <input
+            key={context.router.history.location.key}
+            type="text"
+            className="form-control me-2 mb-2 col-sm-8"
+            defaultValue={this.props.q ?? ""}
+            placeholder={`${I18NextService.i18n.t("search")}...`}
+            aria-label={I18NextService.i18n.t("search")}
+            required
+            minLength={1}
+            ref={this.searchInput}
+          />
+        </div>
+        <div className="col-auto">
+          <button
+            type="submit"
+            className="btn btn-light border-light-subtle mb-2"
+          >
+            {this.state.searchRes.state === "loading" ? (
+              <Spinner />
+            ) : (
+              <Icon icon="search" />
+            )}
+          </button>
+        </div>
+      </form>
+    );
+  }
+
+  get selects() {
+    const {
+      type,
+      listingType,
+      titleOnly,
+      postUrlOnly,
+      communityId,
+      creatorId,
+    } = this.props;
+    const { communitySearchOptions, creatorSearchOptions } = this.state;
+
+    return (
+      <>
+        <div className="row row-cols-auto align-items-center g-2 g-sm-3 mb-2 mb-sm-3">
+          <div className="col">
+            <SearchTypeDropdown
+              currentOption={type}
+              onSelect={val => handleTypeChange(this, val)}
+            />
+          </div>
+          <div className="col">
+            <ListingTypeDropdown
+              currentOption={listingType}
+              showLocal={showLocal(this.isoData)}
+              showSubscribed
+              showSuggested={
+                !!this.isoData.siteRes.site_view.local_site
+                  .suggested_multi_community_id
+              }
+              onSelect={type => handleListingTypeChange(this, type)}
+              myUserInfo={this.isoData.myUserInfo}
+              showLabel
+            />
+          </div>
+          {(type === "all" || type === "posts") && (
+            <>
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"post_title_only"}
+                  isChecked={titleOnly}
+                  onCheck={val => handleTitleOnlyChange(this, val)}
+                />
+              </div>
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"post_url_only"}
+                  isChecked={postUrlOnly}
+                  onCheck={val => handlePostUrlOnlyChange(this, val)}
+                />
+              </div>
+            </>
+          )}
+          <div className="col">
+            <Filter
+              title="all_communities"
+              onChange={choices => handleCommunityFilterChange(this, choices)}
+              onSearch={text => handleCommunitySearch(this, text)}
+              options={communitySearchOptions}
+              value={communityId}
+            />
+          </div>
+          <div className="col">
+            <Filter
+              title="all_creators"
+              onChange={choices => handleCreatorFilterChange(this, choices)}
+              onSearch={text => handleCreatorSearch(this, text)}
+              options={creatorSearchOptions}
+              value={creatorId}
+            />
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  get all() {
+    const { searchRes: searchResponse } = this.state;
+    if (searchResponse.state === "success") {
+      return (
+        <>
+          {communityListing(
+            searchResponse.data.communities,
+            this.isoData.myUserInfo,
+          )}
+          {multiCommunityListing(
+            searchResponse.data.multi_communities,
+            this.isoData.myUserInfo,
+          )}
+          {personListing(searchResponse.data.persons, this.isoData.myUserInfo)}
+          {postListing(searchResponse.data.posts, this.isoData)}
+          {commentListing(searchResponse.data.comments, this.isoData)}
+        </>
+      );
+    } else {
+      return <></>;
+    }
+  }
+
+  get comments() {
+    const { searchRes: searchResponse, siteRes } = this.state;
+    const comments =
+      searchResponse.state === "success" ? searchResponse.data.comments : [];
+
+    return (
+      <CommentNodes
+        nodes={commentsToFlatNodes(comments)}
+        viewType={"flat"}
+        createLoading={undefined}
+        editLoading={undefined}
+        fetchChildrenLoading={undefined}
+        voteLoading={undefined}
+        viewOnly
+        postLockedOrRemovedOrDeleted
+        isTopLevel
+        showCommunity
+        showMarkRead={"hide"}
+        showBadgeForPostCreator={false}
+        mutePersonName={false}
+        muteCommunityName
+        hideAvatar={false}
+        markReadLoading={undefined}
+        allLanguages={siteRes.all_languages}
+        siteLanguages={siteRes.discussion_languages}
+        myUserInfo={this.isoData.myUserInfo}
+        localSite={siteRes.site_view.local_site}
+        admins={this.isoData.siteRes.admins}
+        showContext={false}
+        hideImages={false}
+        // All of these are unused, since its viewonly
+        onSaveComment={() => {}}
+        onBlockPerson={() => {}}
+        onBlockCommunity={() => {}}
+        onDeleteComment={() => {}}
+        onRemoveComment={() => {}}
+        onCommentVote={() => {}}
+        onCommentReport={() => {}}
+        onDistinguishComment={() => {}}
+        onAddModToCommunity={() => {}}
+        onAddAdmin={() => {}}
+        onTransferCommunity={() => {}}
+        onPurgeComment={() => {}}
+        onPurgePerson={() => {}}
+        onBanPersonFromCommunity={() => {}}
+        onBanPerson={() => {}}
+        onCreateComment={() => {}}
+        onEditComment={() => {}}
+        onPersonNote={() => {}}
+        onLockComment={() => {}}
+        onWarnComment={form => handleWarnComment(form)}
+        onMarkRead={() => {}}
+        onFetchChildren={() => {}}
+      />
+    );
+  }
+
+  get posts() {
+    const { searchRes: searchResponse, siteRes } = this.state;
+    const posts =
+      searchResponse.state === "success" ? searchResponse.data.posts : [];
+
+    return (
+      <>
+        {posts.map(pv => (
+          <div key={pv.post.id} className="row">
+            <div className="col-12">
+              <PostListing
+                postView={pv}
+                showCrossPosts="show_separately"
+                showCommunity
+                enableNsfw={enableNsfw(siteRes)}
+                showAdultConsentModal={this.isoData.showAdultConsentModal}
+                allLanguages={siteRes.all_languages}
+                siteLanguages={siteRes.discussion_languages}
+                viewOnly
+                topBorder={false}
+                myUserInfo={this.isoData.myUserInfo}
+                localSite={siteRes.site_view.local_site}
+                admins={this.isoData.siteRes.admins}
+                postListingMode="list"
+                showBody={"hidden"}
+                crossPosts={[]}
+                communityTags={[]}
+                hideImage={false}
+                showMarkRead="hide"
+                disableAutoMarkAsRead={false}
+                editLoading={false}
+                markReadLoading={false}
+                voteLoading={false}
+                mutePersonName={false}
+                muteCommunityName
+                hideAvatar={false}
+                // All of these are unused, since its view only
+                onPostEdit={() => {}}
+                onPostModEdit={() => {}}
+                onPostVote={() => {}}
+                onPostReport={() => {}}
+                onBlockPerson={() => {}}
+                onBlockCommunity={() => {}}
+                onLockPost={() => {}}
+                onWarnPost={form => handleWarnPost(form)}
+                onDeletePost={() => {}}
+                onRemovePost={() => {}}
+                onSavePost={() => {}}
+                onFeaturePost={() => {}}
+                onPurgePerson={() => {}}
+                onPurgePost={() => {}}
+                onBanPersonFromCommunity={() => {}}
+                onBanPerson={() => {}}
+                onAddModToCommunity={() => {}}
+                onAddAdmin={() => {}}
+                onTransferCommunity={() => {}}
+                onMarkPostAsRead={() => {}}
+                onHidePost={() => {}}
+                onPersonNote={() => {}}
+                onScrollIntoCommentsClick={() => {}}
+              />
+            </div>
+          </div>
+        ))}
+      </>
+    );
+  }
+
+  get communities() {
+    const { searchRes: searchResponse } = this.state;
+    const communities =
+      searchResponse.state === "success" ? searchResponse.data.communities : [];
+
+    return (
+      <>
+        <div className="col-12">
+          {communityListing(communities, this.isoData.myUserInfo)}
+        </div>
+      </>
+    );
+  }
+
+  get multiCommunities() {
+    const { searchRes: searchResponse } = this.state;
+    const multiCommunities =
+      searchResponse.state === "success"
+        ? searchResponse.data.multi_communities
+        : [];
+
+    return (
+      <>
+        <div className="col-12">
+          {multiCommunityListing(multiCommunities, this.isoData.myUserInfo)}
+        </div>
+      </>
+    );
+  }
+
+  get users() {
+    const { searchRes: searchResponse } = this.state;
+    const users =
+      searchResponse.state === "success" ? searchResponse.data.persons : [];
+
+    return (
+      <>
+        <div className="col-12">
+          {personListing(users, this.isoData.myUserInfo)}
+        </div>
+      </>
+    );
+  }
+
+  get resultsCount(): number {
+    const { searchRes: r } = this.state;
+
+    if (r.state === "success") {
+      const resolveCount = r.data.resolve !== undefined ? 1 : 0;
+      return (
+        r.data.posts.length +
+        r.data.comments.length +
+        r.data.communities.length +
+        r.data.persons.length +
+        r.data.multi_communities.length +
+        resolveCount
+      );
+    } else {
+      return 0;
+    }
+  }
+
+  searchToken?: symbol;
+  async search(props: SearchRouteProps) {
+    const token = (this.searchToken = Symbol());
+    const {
+      q,
+      communityId,
+      type,
+      listingType,
+      titleOnly,
+      postUrlOnly,
+      creatorId,
+    } = props;
+
+    if (q) {
+      this.setState({ searchRes: LOADING_REQUEST });
+      const searchRes = await HttpService.client.search({
+        search_term: q,
+        community_id: communityId ?? undefined,
+        creator_id: creatorId ?? undefined,
+        type_: type,
+        listing_type: listingType,
+        title_only: titleOnly,
+        post_url_only: postUrlOnly,
+        limit: fetchLimit,
+      });
+      if (token !== this.searchToken) {
+        return;
+      }
+      this.setState({ searchRes });
+    } else {
+      this.setState({ searchRes: EMPTY_REQUEST });
+    }
+  }
+
+  getQ(): string | undefined {
+    return this.searchInput.current?.value ?? this.props.q;
+  }
+
+  updateUrl(props: Partial<SearchProps>) {
+    const {
+      q,
+      type,
+      listingType,
+      titleOnly,
+      postUrlOnly,
+      communityId,
+      creatorId,
+      cursor,
+    } = {
+      ...this.props,
+      ...props,
+    };
+
+    const queryParams: QueryParams<SearchProps> = {
+      q,
+      type,
+      listingType,
+      titleOnly: titleOnly?.toString(),
+      postUrlOnly: postUrlOnly?.toString(),
+      communityId: communityId?.toString(),
+      creatorId: creatorId?.toString(),
+      cursor,
+    };
+
+    this.props.history.push(`/search${getQueryString(queryParams)}`);
+  }
+}
+
+const handleCreatorSearch = debounce(async (i: Search, text: string) => {
+  if (text.length > 0) {
+    const { creatorId } = i.props;
+    const { creatorSearchOptions } = i.state;
+
+    i.setState({ searchCreatorLoading: true });
+
+    const newOptions = creatorSearchOptions
+      .filter(choice => getIdFromString(choice.value) === creatorId)
+      .concat((await searchUsers(text)).map(personToChoice));
+
+    i.setState({
+      searchCreatorLoading: false,
+      creatorSearchOptions: newOptions,
+    });
+  }
+});
+
+const handleCommunitySearch = debounce(async (i: Search, text: string) => {
+  if (text.length > 0) {
+    const { communityId } = i.props;
+    const { communitySearchOptions } = i.state;
+
+    i.setState({
+      searchCommunitiesLoading: true,
+    });
+
+    const newOptions = communitySearchOptions
+      .filter(choice => getIdFromString(choice.value) === communityId)
+      .concat((await searchCommunities(text)).map(communityToChoice));
+
+    i.setState({
+      searchCommunitiesLoading: false,
+      communitySearchOptions: newOptions,
+    });
+  }
+});
+
+function handleTitleOnlyChange(i: Search, titleOnly: boolean) {
+  // Don't allow post url and post title only to be checked at the same time
+  i.updateUrl({ titleOnly, q: i.getQ(), postUrlOnly: false });
+}
+
+function handlePostUrlOnlyChange(i: Search, postUrlOnly: boolean) {
+  // Don't allow post url and post title only to be checked at the same time
+  i.updateUrl({ postUrlOnly, q: i.getQ(), titleOnly: false });
+}
+
+function handleTypeChange(i: Search, type: SearchType) {
+  i.updateUrl({
+    type,
+    cursor: undefined,
+    q: i.getQ(),
+  });
+}
+
+function handleListingTypeChange(i: Search, listingType: ListingType) {
+  i.updateUrl({
+    listingType,
+    cursor: undefined,
+    q: i.getQ(),
+  });
+}
+
+function handleCommunityFilterChange(i: Search, choices: Choice[]) {
+  i.updateUrl({
+    communityId: getIdFromString(choices[0].value),
+    cursor: undefined,
+    q: i.getQ(),
+  });
+}
+
+function handleCreatorFilterChange(i: Search, choices: Choice[]) {
+  i.updateUrl({
+    creatorId: getIdFromString(choices[0].value),
+    cursor: undefined,
+    q: i.getQ(),
+  });
+}
+
+function handleSearchSubmit(i: Search, event: FormEvent<HTMLFormElement>) {
+  event.preventDefault();
+
+  i.updateUrl({
+    q: i.getQ(),
+    cursor: undefined,
+  });
+}

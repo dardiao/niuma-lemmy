@@ -1,0 +1,181 @@
+use crate::{
+  source::post_report::{PostReport, PostReportForm, UpdatePostReportForm},
+  traits::Reportable,
+};
+use chrono::Utc;
+use diesel::{
+  BoolExpressionMethods,
+  ExpressionMethods,
+  QueryDsl,
+  dsl::{insert_into, update},
+};
+use diesel_async::RunQueryDsl;
+use lemmy_db_schema_file::{
+  PersonId,
+  newtypes::{PostId, PostReportId},
+  schema::post_report,
+};
+use lemmy_diesel_utils::connection::{DbPool, get_conn};
+use lemmy_utils::error::{LemmyErrorExt, LemmyErrorType, LemmyResult};
+
+impl Reportable for PostReport {
+  type Form = PostReportForm;
+  type UpdateForm = UpdatePostReportForm;
+  type IdType = PostReportId;
+  type ObjectIdType = PostId;
+
+  async fn report(pool: &mut DbPool<'_>, form: &Self::Form) -> LemmyResult<Self> {
+    let conn = &mut get_conn(pool).await?;
+    insert_into(post_report::table)
+      .values(form)
+      .get_result::<Self>(conn)
+      .await
+      .with_lemmy_type(LemmyErrorType::CouldntCreate)
+  }
+
+  async fn update_resolved(
+    pool: &mut DbPool<'_>,
+    report_id: Self::IdType,
+    form: &Self::UpdateForm,
+  ) -> LemmyResult<usize> {
+    let conn = &mut get_conn(pool).await?;
+    update(post_report::table.find(report_id))
+      .set(form)
+      .execute(conn)
+      .await
+      .with_lemmy_type(LemmyErrorType::CouldntUpdate)
+  }
+
+  async fn resolve_apub(
+    pool: &mut DbPool<'_>,
+    object_id: Self::ObjectIdType,
+    report_creator_id: PersonId,
+    resolver_id: PersonId,
+  ) -> LemmyResult<usize> {
+    let conn = &mut get_conn(pool).await?;
+    update(
+      post_report::table.filter(
+        post_report::post_id
+          .eq(object_id)
+          .and(post_report::creator_id.eq(report_creator_id)),
+      ),
+    )
+    .set((
+      post_report::resolved.eq(true),
+      post_report::resolver_id.eq(resolver_id),
+      post_report::updated_at.eq(Utc::now()),
+    ))
+    .execute(conn)
+    .await
+    .with_lemmy_type(LemmyErrorType::CouldntUpdate)
+  }
+
+  async fn resolve_all_for_object(
+    pool: &mut DbPool<'_>,
+    post_id_: PostId,
+    by_resolver_id: PersonId,
+  ) -> LemmyResult<usize> {
+    let conn = &mut get_conn(pool).await?;
+    update(post_report::table.filter(post_report::post_id.eq(post_id_)))
+      .set((
+        post_report::resolved.eq(true),
+        post_report::resolver_id.eq(by_resolver_id),
+        post_report::updated_at.eq(Utc::now()),
+      ))
+      .execute(conn)
+      .await
+      .with_lemmy_type(LemmyErrorType::CouldntUpdate)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+
+  use super::*;
+  use crate::source::{
+    community::{Community, CommunityInsertForm},
+    instance::Instance,
+    person::{Person, PersonInsertForm},
+    post::{Post, PostInsertForm},
+  };
+  use lemmy_diesel_utils::{connection::build_db_pool_for_tests, traits::Crud};
+  use serial_test::serial;
+
+  struct Data {
+    instance: Instance,
+    person: Person,
+    report: PostReport,
+  }
+
+  async fn init_data(pool: &mut DbPool<'_>) -> LemmyResult<Data> {
+    let instance = Instance::read_or_create(pool, "my_domain.tld").await?;
+    let person_form = PersonInsertForm::test_form(instance.id, "jim");
+    let person = Person::create(pool, &person_form).await?;
+
+    let community_form = CommunityInsertForm::new(
+      instance.id,
+      "test community_4".to_string(),
+      "pubkey".to_string(),
+    );
+    let community = Community::create(pool, &community_form).await?;
+
+    let form = PostInsertForm::new("A test post".into(), person.id, community.id);
+    let post = Post::create(pool, &form).await?;
+
+    let report_form = PostReportForm {
+      post_id: post.id,
+      creator_id: person.id,
+      reason: "my reason".to_string(),
+      ..Default::default()
+    };
+    let report = PostReport::report(pool, &report_form).await?;
+
+    Ok(Data {
+      instance,
+      person,
+      report,
+    })
+  }
+
+  async fn cleanup(data: Data, pool: &mut DbPool<'_>) -> LemmyResult<()> {
+    Instance::delete(pool, data.instance.id).await?;
+
+    Ok(())
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_resolve_post_report() -> LemmyResult<()> {
+    let pool = &build_db_pool_for_tests();
+    let pool = &mut pool.into();
+    let data = init_data(pool).await?;
+
+    let update_form = UpdatePostReportForm {
+      resolver_id: Some(data.person.id),
+      resolved: Some(true),
+      ..Default::default()
+    };
+
+    let resolved_count = PostReport::update_resolved(pool, data.report.id, &update_form).await?;
+    assert_eq!(resolved_count, 1);
+
+    let unresolved_count = PostReport::update_resolved(pool, data.report.id, &update_form).await?;
+    assert_eq!(unresolved_count, 1);
+
+    cleanup(data, pool).await
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_resolve_all_post_reports() -> LemmyResult<()> {
+    let pool = &build_db_pool_for_tests();
+    let pool = &mut pool.into();
+    let data = init_data(pool).await?;
+
+    let resolved_count =
+      PostReport::resolve_all_for_object(pool, data.report.post_id, data.person.id).await?;
+    assert_eq!(resolved_count, 1);
+
+    cleanup(data, pool).await
+  }
+}

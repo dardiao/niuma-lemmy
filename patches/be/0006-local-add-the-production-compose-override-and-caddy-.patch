@@ -1,0 +1,159 @@
+From 4f8a86c6a83e02463da1944bc361784326777b53 Mon Sep 17 00:00:00 2001
+From: dardiao <xn--6s1a@outlook.com>
+Date: Sun, 20 Sep 2026 02:18:27 +0800
+Subject: [PATCH 6/7] local: add the production compose override and caddy
+ config
+
+Preparation for putting this on a server. docker-compose.prod.yml swaps the nginx proxy for
+caddy (so certificates are obtained and renewed automatically), stops publishing the internal
+ports (the dev file exposes postgres on 5433, which must not face the internet), and drives
+every secret and the domain from an env file. Caddyfile carries the same routing rules as the
+dev nginx config, including the Accept-header branch that lets other instances fetch
+ActivityPub objects.
+
+Verified: `docker compose -f docker-compose.yml -f docker-compose.prod.yml config` merges to
+only 80/443 published, and `caddy validate` accepts the Caddyfile.
+---
+ docker/Caddyfile               | 56 +++++++++++++++++++++++++++++
+ docker/docker-compose.prod.yml | 66 ++++++++++++++++++++++++++++++++++
+ 2 files changed, 122 insertions(+)
+ create mode 100644 docker/Caddyfile
+ create mode 100644 docker/docker-compose.prod.yml
+
+diff --git a/docker/Caddyfile b/docker/Caddyfile
+new file mode 100644
+index 0000000..1deeb60
+--- /dev/null
++++ b/docker/Caddyfile
+@@ -0,0 +1,56 @@
++# 生产反向代理。Caddy 会自动为 {$LEMMY_DOMAIN} 申请并续期 Let's Encrypt 证书，
++# 并把 http 跳转到 https。路径路由规则和开发用的 nginx.conf 保持一致。
++{
++	email {$ACME_EMAIL}
++	# 证书和账号数据放在 caddy_data 卷里，重建容器不会丢
++}
++
++{$LEMMY_DOMAIN} {
++	encode zstd gzip
++
++	# 其它实例来抓 ActivityPub 时带的是 JSON-LD 的 Accept 头，但 URL 看起来像普通页面，
++	# 这些请求必须转发到后端而不是前端。
++	@activitypub header_regexp Accept "application/(activity|ld)\+json"
++	handle @activitypub {
++		reverse_proxy lemmy:8536 {
++			header_up Host {host}
++		}
++	}
++
++	handle /api/* {
++		reverse_proxy lemmy:8536 {
++			header_up Host {host}
++		}
++	}
++	handle /pictrs/* {
++		reverse_proxy pictrs:8080
++	}
++	handle /feeds/* {
++		reverse_proxy lemmy:8536 {
++			header_up Host {host}
++		}
++	}
++	handle /nodeinfo/* {
++		reverse_proxy lemmy:8536 {
++			header_up Host {host}
++		}
++	}
++	handle /version {
++		reverse_proxy lemmy:8536 {
++			header_up Host {host}
++		}
++	}
++	# webfinger / nodeinfo / host-meta 等联邦发现接口
++	handle /.well-known/* {
++		reverse_proxy lemmy:8536 {
++			header_up Host {host}
++		}
++	}
++
++	# 其余都是前端
++	handle {
++		reverse_proxy lemmy-ui:1234 {
++			header_up Host {host}
++		}
++	}
++}
+diff --git a/docker/docker-compose.prod.yml b/docker/docker-compose.prod.yml
+new file mode 100644
+index 0000000..3bfcdc6
+--- /dev/null
++++ b/docker/docker-compose.prod.yml
+@@ -0,0 +1,66 @@
++# 生产环境 override，和开发用的 docker-compose.yml 叠加使用：
++#
++#   cd lemmy/docker
++#   docker compose --env-file ../../lemmy-deploy/.env \
++#     -f docker-compose.yml -f docker-compose.prod.yml up -d
++#
++# 与开发栈的区别：
++#   - proxy 从 nginx(1236/8536) 换成 caddy(80/443)，自动申请和续期证书
++#   - 内部端口不再对外发布（开发文件把 postgres 的 5433 映射出去了，公网上不能留）
++#   - 口令、域名、安全联系人全部来自 .env；lemmy 配置用 lemmy-deploy 生成的生产版
++#
++# 需要 compose >= 2.24（用到 !override / !reset 合并标签），上服务器第一件事就是
++# `docker compose version` 确认一下。
++
++services:
++  proxy:
++    image: caddy:2-alpine
++    ports: !override
++      - "80:80"
++      - "443:443"
++    volumes: !override
++      - ./Caddyfile:/etc/caddy/Caddyfile:ro
++      - caddy_data:/data
++      - caddy_config:/config
++    environment:
++      LEMMY_DOMAIN: ${LEMMY_DOMAIN:?请在 .env 里设置 LEMMY_DOMAIN}
++      ACME_EMAIL: ${ACME_EMAIL:?请在 .env 里设置 ACME_EMAIL}
++    healthcheck: !override
++      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/"]
++      interval: 30s
++      timeout: 5s
++      retries: 5
++      start_period: 20s
++
++  lemmy:
++    environment:
++      RUST_LOG: warn,extism=info,lemmy_server=info,lemmy_api=info,lemmy_apub=info
++      # 生产默认开启对外联邦；设成 true 就变成只读的本地实例
++      LEMMY_DISABLE_ACTIVITY_SENDING: ${LEMMY_DISABLE_ACTIVITY_SENDING:-false}
++    volumes: !override
++      - ../../lemmy-deploy/lemmy.prod.hjson:/config/config.hjson:Z
++      - ./plugins:/plugins:Z
++
++  lemmy-ui:
++    environment:
++      # 浏览器用正式域名访问（同源，走 caddy 转发），服务端渲染走 compose 网络
++      LEMMY_UI_BACKEND: ${LEMMY_DOMAIN}
++      LEMMY_UI_BACKEND_INTERNAL: lemmy:8536
++      LEMMY_UI_FRONTEND: ${LEMMY_DOMAIN}
++      LEMMY_UI_HTTPS: "true"
++      LEMMY_UI_SECURITY_CONTACT: ${LEMMY_UI_SECURITY_CONTACT:-}
++      LEMMY_UI_ERUDA: "false"
++
++  pictrs:
++    environment:
++      PICTRS__SERVER__API_KEY: ${PICTRS_API_KEY:?请在 .env 里设置 PICTRS_API_KEY}
++
++  postgres:
++    # 生产不把数据库端口发布到宿主机
++    ports: !reset []
++    environment:
++      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 里设置 POSTGRES_PASSWORD}
++
++volumes:
++  caddy_data:
++  caddy_config:
+-- 
+2.54.0
+

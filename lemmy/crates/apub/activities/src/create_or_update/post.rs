@@ -1,0 +1,162 @@
+use crate::{
+  activity_lists::AnnouncableActivities,
+  community::send_activity_in_community,
+  create_or_update::{parse_apub_mentions, tagged_user_inboxes},
+  generate_activity_id,
+  protocol::{CreateOrUpdateType, create_or_update::page::CreateOrUpdatePage},
+};
+use activitypub_federation::{
+  config::Data,
+  protocol::verification::{verify_domains_match, verify_urls_match},
+  traits::{Activity, Object},
+};
+use chrono::Utc;
+use lemmy_api_utils::{
+  context::LemmyContext,
+  notify::NotifyData,
+  utils::check_community_deleted_removed,
+};
+use lemmy_apub_objects::{
+  objects::{
+    community::ApubCommunity,
+    person::ApubPerson,
+    post::{ApubPost, post_nsfw, update_apub_post_tags},
+  },
+  utils::{
+    functions::{generate_to, verify_mod_action, verify_person_in_community, verify_visibility},
+    protocol::InCommunity,
+  },
+};
+use lemmy_db_schema::{
+  source::{
+    community::Community,
+    person::Person,
+    post::{Post, PostActions, PostLikeForm, PostUpdateForm},
+  },
+  traits::Likeable,
+};
+use lemmy_db_schema_file::PersonId;
+use lemmy_db_views_site::SiteView;
+use lemmy_diesel_utils::traits::Crud;
+use lemmy_utils::error::{LemmyError, LemmyErrorType, LemmyResult};
+use url::Url;
+
+impl CreateOrUpdatePage {
+  pub async fn new(
+    post: ApubPost,
+    actor: &ApubPerson,
+    community: &ApubCommunity,
+    kind: CreateOrUpdateType,
+    context: &Data<LemmyContext>,
+  ) -> LemmyResult<CreateOrUpdatePage> {
+    let id = generate_activity_id(kind.clone(), context)?;
+    Ok(CreateOrUpdatePage {
+      actor: actor.id().clone().into(),
+      to: generate_to(community)?,
+      object: post.into_json(context).await?,
+      cc: vec![community.id().clone()],
+      kind,
+      id: id.clone(),
+      audience: Some(community.ap_id.clone().into()),
+    })
+  }
+
+  pub(crate) async fn send(
+    post: Post,
+    person_id: PersonId,
+    kind: CreateOrUpdateType,
+    context: Data<LemmyContext>,
+  ) -> LemmyResult<()> {
+    let community_id = post.community_id;
+    let person: ApubPerson = Person::read(&mut context.pool(), person_id).await?.into();
+    let community: ApubCommunity = Community::read(&mut context.pool(), community_id)
+      .await?
+      .into();
+
+    let create_or_update =
+      CreateOrUpdatePage::new(post.into(), &person, &community, kind, &context).await?;
+    let inboxes = tagged_user_inboxes(&create_or_update.object.tag, &context).await?;
+    let activity = AnnouncableActivities::CreateOrUpdatePost(create_or_update);
+    send_activity_in_community(activity, &person, &community, inboxes, false, &context).await?;
+    Ok(())
+  }
+}
+
+#[async_trait::async_trait]
+impl Activity for CreateOrUpdatePage {
+  type DataType = LemmyContext;
+  type Error = LemmyError;
+
+  fn id(&self) -> &Url {
+    &self.id
+  }
+
+  fn actor(&self) -> &Url {
+    self.actor.inner()
+  }
+
+  async fn verify(&self, context: &Data<LemmyContext>) -> LemmyResult<()> {
+    let community = self.community(context).await?;
+    verify_visibility(&self.to, &self.cc, &community)?;
+    check_community_deleted_removed(&community)?;
+    verify_domains_match(self.actor.inner(), self.object.id.inner())?;
+    ApubPost::verify(&self.object, self.actor.inner(), context).await?;
+    Ok(())
+  }
+
+  async fn receive(self, context: &Data<LemmyContext>) -> LemmyResult<()> {
+    let community = self.community(context).await?;
+    let is_same_actor =
+      verify_urls_match(self.actor.inner(), self.object.creator()?.inner()).is_ok();
+    let original_post =
+      Post::read_from_apub_id(&mut context.pool(), self.object.id.clone().into()).await;
+    let is_mod_action = verify_mod_action(&self.actor, self.object.id.inner(), &community, context)
+      .await
+      .is_ok();
+    // allow mods to edit the post
+    if !is_same_actor && let Ok(Some(post)) = original_post {
+      if is_mod_action {
+        let local_site = SiteView::read_local(&mut context.pool()).await?.local_site;
+        let form = PostUpdateForm {
+          updated_at: Some(Some(Utc::now())),
+          nsfw: post_nsfw(&self.object, &community, Some(&local_site), context).await?,
+          ..Default::default()
+        };
+        Post::update(&mut context.pool(), post.id, &form).await?;
+        update_apub_post_tags(&self.object, &post, context).await?;
+        return Ok(());
+      } else {
+        return Err(LemmyErrorType::NotAModerator.into());
+      }
+    }
+
+    if !is_mod_action {
+      verify_person_in_community(&self.actor, &community, context).await?;
+    }
+
+    verify_urls_match(self.actor.inner(), self.object.creator()?.inner())?;
+    let site_view = SiteView::read_local(&mut context.pool()).await?;
+
+    let post = ApubPost::from_json(self.object.clone(), context).await?;
+
+    // author likes their own post by default
+    let like_form = PostLikeForm::new(post.id, post.creator_id, Some(true));
+    PostActions::like(&mut context.pool(), &like_form).await?;
+
+    // Calculate initial hot_rank for post
+    Post::update_ranks(&mut context.pool(), post.id).await?;
+
+    let do_send_email =
+      self.kind == CreateOrUpdateType::Create && !site_view.local_site.email_notifications_disabled;
+    let actor = self.actor.dereference(context).await?;
+
+    NotifyData {
+      apub_mentions: Some(parse_apub_mentions(&self.object.tag, context).await?),
+      do_send_email,
+      ..NotifyData::new(post.0, actor.0, community.0)
+    }
+    .send(context);
+
+    Ok(())
+  }
+}

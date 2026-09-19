@@ -1,0 +1,36 @@
+From 698beed368bbfd23b7bf60a59d3adb12e0a6516f Mon Sep 17 00:00:00 2001
+From: dardiao <xn--6s1a@outlook.com>
+Date: Sat, 19 Sep 2026 16:09:42 +0800
+Subject: [PATCH 06/14] local: cap the height of every dropdown menu
+
+Any long menu could grow past the viewport and force the whole page to be scrolled - the
+interface language picker (~34 entries) was the worst case. Cap every dropdown menu at 50vh
+with internal scrolling, and keep overscroll-behavior: contain so the page does not keep
+scrolling once a list reaches its end.
+
+Done in CSS only, so short menus are unaffected (they never reach the cap) and no component
+needs to change.
+---
+ src/assets/css/main.css | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/assets/css/main.css b/src/assets/css/main.css
+index a09ae31c..f9924466 100644
+--- a/src/assets/css/main.css
++++ b/src/assets/css/main.css
+@@ -567,3 +567,12 @@ em-emoji-picker {
+ .viewer-transition {
+   transition-duration: 0.1s; /* 0.3s -> 0.1s */
+ }
++
++/* LOCAL: cap every dropdown menu. Long lists (the interface language picker) then scroll
++   inside the menu instead of stretching the page, and overscroll-behavior stops the page
++   from scrolling once the list hits its end. */
++.dropdown-menu {
++  max-height: 50vh;
++  overflow-y: auto;
++  overscroll-behavior: contain;
++}
+-- 
+2.54.0
+

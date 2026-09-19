@@ -1,0 +1,166 @@
+From e39f57e8f6e5be6482f1cb92b95c79512b508075 Mon Sep 17 00:00:00 2001
+From: dardiao <xn--6s1a@outlook.com>
+Date: Sat, 19 Sep 2026 10:37:34 +0800
+Subject: [PATCH 2/7] local: run the whole stack from source with health-gated
+ startup
+
+- build lemmy-ui from the ../../lemmy-ui checkout instead of pulling
+  dessalines/lemmy-ui:nightly, so local frontend changes are included
+- add healthchecks to all five services and make depends_on wait for
+  service_healthy, which removes the startup race against postgres and
+  the retry noise it produced in the lemmy logs
+- add LEMMY_IMAGE_PLATFORM (unset by default) to switch every service to
+  linux/amd64 or linux/arm64 for emulated runs
+---
+ docker/docker-compose.yml | 81 ++++++++++++++++++++++++++++++++-------
+ 1 file changed, 67 insertions(+), 14 deletions(-)
+
+diff --git a/docker/docker-compose.yml b/docker/docker-compose.yml
+index f5be675..13967d3 100644
+--- a/docker/docker-compose.yml
++++ b/docker/docker-compose.yml
+@@ -4,9 +4,17 @@ x-logging: &default-logging
+     max-size: "50m"
+     max-file: "4"
+ 
++# Everything below runs on the host's own architecture by default. Export
++# LEMMY_IMAGE_PLATFORM=linux/amd64 (or linux/arm64) before `docker compose up` to run the
++# whole stack under emulation instead - useful on Apple Silicon when an image has no arm64
++# build, or to reproduce a report that only happens on x86_64. An empty value drops the key
++# entirely, which is what compose wants for "use the native platform".
++x-image-platform: &image-platform ${LEMMY_IMAGE_PLATFORM:-}
++
+ services:
+   proxy:
+     image: nginx:1-alpine
++    platform: *image-platform
+     ports:
+       # actual and only port facing any connection from outside
+       # Note, change the left number if port 1236 is already in use on your system
+@@ -17,11 +25,23 @@ services:
+       - ./nginx.conf:/etc/nginx/nginx.conf:ro,Z
+     restart: unless-stopped
+     depends_on:
+-      - pictrs
+-      - lemmy-ui
++      lemmy:
++        condition: service_healthy
++      lemmy-ui:
++        condition: service_healthy
++      pictrs:
++        condition: service_healthy
++    healthcheck:
++      # busybox wget is in the alpine image; check the public port the proxy actually serves.
++      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:1236/"]
++      interval: 10s
++      timeout: 5s
++      retries: 5
++      start_period: 10s
+     logging: *default-logging
+ 
+   lemmy:
++    platform: *image-platform
+     build:
+       context: ../
+       dockerfile: docker/Dockerfile
+@@ -34,20 +54,28 @@ services:
+       - ./lemmy.hjson:/config/config.hjson:Z
+       - ./plugins:/plugins:Z
+     depends_on:
+-      - postgres
+-      - pictrs
++      postgres:
++        condition: service_healthy
++      pictrs:
++        condition: service_healthy
++    healthcheck:
++      # The runner image installs curl. /api/v3/site only answers 200 once the migrations
++      # have run, so this doubles as the "database is usable" check for everything downstream.
++      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8536/api/v3/site"]
++      interval: 15s
++      timeout: 5s
++      retries: 5
++      start_period: 90s
+     logging: *default-logging
+ 
+   lemmy-ui:
+-    # use "image" to pull down an already compiled lemmy-ui. make sure to comment out "build".
+-    image: dessalines/lemmy-ui:nightly
+-    # platform: linux/x86_64 # no arm64 support. uncomment platform if using m1.
+-    # use "build" to build your local lemmy ui image for development. make sure to comment out "image".
+-    # run: docker compose up --build
+-
+-    # build:
+-    #   context: ../../lemmy-ui # assuming lemmy-ui is cloned besides lemmy directory
+-    #   dockerfile: dev.dockerfile
++    platform: *image-platform
++    # Build the local lemmy-ui checkout so frontend changes are included.
++    # Use the image below instead when a prebuilt UI is preferred.
++    # image: dessalines/lemmy-ui:nightly
++    build:
++      context: ../../lemmy-ui
++      dockerfile: dev.dockerfile
+     environment:
+       # this needs to match the hostname defined in the lemmy service
+       - LEMMY_UI_BACKEND=lemmy:8536
+@@ -55,13 +83,22 @@ services:
+       - LEMMY_UI_HTTPS=false
+       - LEMMY_UI_ERUDA=true
+     depends_on:
+-      - lemmy
++      lemmy:
++        condition: service_healthy
++    healthcheck:
++      # busybox wget again; the dev server answers on every path.
++      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:1234/"]
++      interval: 10s
++      timeout: 5s
++      retries: 5
++      start_period: 20s
+     restart: unless-stopped
+     logging: *default-logging
+     init: true
+ 
+   pictrs:
+     image: asonix/pictrs:0.5
++    platform: *image-platform
+     # this needs to match the pictrs url in lemmy.hjson
+     hostname: pictrs
+     # we can set options to pictrs like this, here we set max. image size and forced format for conversion
+@@ -77,11 +114,19 @@ services:
+     user: 991:991
+     volumes:
+       - ./volumes/pictrs:/mnt:Z
++    healthcheck:
++      # pict-rs serves /healthz; the image ships wget.
++      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
++      interval: 10s
++      timeout: 5s
++      retries: 5
++      start_period: 20s
+     restart: unless-stopped
+     logging: *default-logging
+ 
+   postgres:
+     image: pgautoupgrade/pgautoupgrade:18-alpine
++    platform: *image-platform
+     # this needs to match the database host in lemmy.hson
+     # Tune your settings via
+     # https://pgtune.leopard.in.ua/#/
+@@ -99,5 +144,13 @@ services:
+     volumes:
+       - ./volumes/postgres:/var/lib/postgresql:Z
+       - ./customPostgresql.conf:/etc/postgresql.conf:Z
++    healthcheck:
++      # Keep the image's own check (it also waits for a pending major-version upgrade to
++      # finish) and only tighten the timing, so `up` doesn't idle for the default 30s.
++      test: ["CMD-SHELL", "/usr/local/bin/pgautoupgrade-healthcheck.sh"]
++      interval: 5s
++      timeout: 10s
++      retries: 12
++      start_period: 30s
+     restart: unless-stopped
+     logging: *default-logging
+-- 
+2.54.0
+

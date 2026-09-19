@@ -1,0 +1,295 @@
+use crate::error::{LemmyErrorType, LemmyResult};
+use clearurls::UrlCleaner;
+use markdown_it::MarkdownIt;
+use regex::RegexSet;
+use std::sync::LazyLock;
+pub mod code_links;
+mod identifier_rule;
+pub mod image_links;
+mod link_rule;
+use url::Url;
+
+#[expect(clippy::expect_used)]
+static URL_CLEANER: LazyLock<UrlCleaner> =
+  LazyLock::new(|| UrlCleaner::from_embedded_rules().expect("compile clearurls"));
+
+static MARKDOWN_PARSER: LazyLock<MarkdownIt> = LazyLock::new(|| {
+  let mut parser = MarkdownIt::new();
+  markdown_it::plugins::cmark::add(&mut parser);
+  markdown_it::plugins::extra::add(&mut parser);
+  markdown_it_block_spoiler::add(&mut parser);
+  markdown_it_sub::add(&mut parser);
+  markdown_it_sup::add(&mut parser);
+  markdown_it_ruby::add(&mut parser);
+  markdown_it_footnote::add(&mut parser);
+  link_rule::add(&mut parser);
+  identifier_rule::add(&mut parser);
+
+  parser
+});
+
+pub fn markdown_to_html(text: &str) -> String {
+  MARKDOWN_PARSER.parse(text).xrender()
+}
+
+pub fn markdown_check_for_blocked_urls(text: &str, blocklist: &RegexSet) -> LemmyResult<()> {
+  if blocklist.is_match(text) {
+    return Err(LemmyErrorType::BlockedUrl.into());
+  }
+  Ok(())
+}
+
+/// Cleans a url of tracking parameters.
+pub fn clean_url(url: &Url) -> Url {
+  match URL_CLEANER.clear_single_url(url) {
+    Ok(res) => res.into_owned(),
+    // If there are any errors, just return the original url
+    Err(_) => url.clone(),
+  }
+}
+
+/// Cleans all the links in a string of tracking parameters.
+fn clean_urls_in_text(text: &str) -> String {
+  match URL_CLEANER.clear_text(text) {
+    Ok(res) => res.into_owned(),
+    // If there are any errors, just return the original text
+    Err(_) => text.to_owned(),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+
+  use super::*;
+  use crate::utils::validation::check_urls_are_valid;
+  use pretty_assertions::assert_eq;
+  use regex::escape;
+
+  #[test]
+  fn test_basic_markdown() {
+    let tests: Vec<_> = vec![
+      (
+        "rewrite community identifier",
+        "!test@lemmy-alpha",
+        "<p><a href=\"/c/test@lemmy-alpha\" rel=\"nofollow\" class=\"u-url mention\">!test@lemmy-alpha</a></p>\n",
+      ),
+      (
+        "rewrite user identifier",
+        "@garda@lemmy-alpha",
+        "<p><a href=\"/u/garda@lemmy-alpha\" rel=\"nofollow\" class=\"u-url mention\">@garda@lemmy-alpha</a></p>\n",
+      ),
+      (
+        "headings",
+        "# h1\n## h2\n### h3\n#### h4\n##### h5\n###### h6",
+        "<h1>h1</h1>\n<h2>h2</h2>\n<h3>h3</h3>\n<h4>h4</h4>\n<h5>h5</h5>\n<h6>h6</h6>\n",
+      ),
+      ("line breaks", "First\rSecond", "<p>First\nSecond</p>\n"),
+      (
+        "emphasis",
+        "__bold__ **bold** *italic* ***bold+italic***",
+        "<p><strong>bold</strong> <strong>bold</strong> <em>italic</em> <em><strong>bold+italic</strong></em></p>\n",
+      ),
+      (
+        "blockquotes",
+        "> #### Hello\n > \n > - Hola\n > - 안영 \n>> Goodbye\n",
+        "<blockquote>\n<h4>Hello</h4>\n<ul>\n<li>Hola</li>\n<li>안영</li>\n</ul>\n<blockquote>\n<p>Goodbye</p>\n</blockquote>\n</blockquote>\n",
+      ),
+      (
+        "lists (ordered, unordered)",
+        "1. pen\n2. apple\n3. apple pen\n- pen\n- pineapple\n- pineapple pen",
+        "<ol>\n<li>pen</li>\n<li>apple</li>\n<li>apple pen</li>\n</ol>\n<ul>\n<li>pen</li>\n<li>pineapple</li>\n<li>pineapple pen</li>\n</ul>\n",
+      ),
+      (
+        "code and code blocks",
+        "this is my amazing `code snippet` and my amazing ```code block```",
+        "<p>this is my amazing <code>code snippet</code> and my amazing <code>code block</code></p>\n",
+      ),
+      // Links with added nofollow attribute
+      (
+        "links",
+        "[Lemmy](https://join-lemmy.org/ \"Join Lemmy!\")",
+        "<p><a href=\"https://join-lemmy.org/\" rel=\"nofollow\" title=\"Join Lemmy!\">Lemmy</a></p>\n",
+      ),
+      // Remote images with proxy
+      (
+        "images",
+        "![My linked image](https://example.com/image.png \"image alt text\")",
+        "<p><img src=\"https://example.com/image.png\" alt=\"My linked image\" title=\"image alt text\" /></p>\n",
+      ),
+      // Local images without proxy
+      (
+        "images",
+        "![My linked image](https://lemmy-alpha/image.png \"image alt text\")",
+        "<p><img src=\"https://lemmy-alpha/image.png\" alt=\"My linked image\" title=\"image alt text\" /></p>\n",
+      ),
+      // Ensure spoiler plugin is added
+      (
+        "basic spoiler",
+        "::: spoiler click to see more\nhow spicy!\n:::\n",
+        "<details>\n<summary>\nclick to see more\n</summary>\n<p>how spicy!</p>\n</details>\n",
+      ),
+      (
+        "escape html special chars",
+        "<script>alert('xss');</script> hello &\"",
+        "<p>&lt;script&gt;alert(‘xss’);&lt;/script&gt; hello &amp;&quot;</p>\n",
+      ),
+      ("subscript", "log~2~(a)", "<p>log<sub>2</sub>(a)</p>\n"),
+      (
+        "superscript",
+        "Markdown^TM^",
+        "<p>Markdown<sup>TM</sup></p>\n",
+      ),
+      (
+        "ruby text",
+        "{漢|Kan}{字|ji}",
+        "<p><ruby>漢<rp>(</rp><rt>Kan</rt><rp>)</rp></ruby><ruby>字<rp>(</rp><rt>ji</rt><rp>)</rp></ruby></p>\n",
+      ),
+      (
+        "footnotes",
+        "Bold claim.[^1]\n\n[^1]: example.com",
+        "<p>Bold claim.<sup class=\"footnote-ref\"><a href=\"#fn1\" id=\"fnref1\">[1]</a></sup></p>\n\
+	 <hr class=\"footnotes-sep\" />\n\
+	 <section class=\"footnotes\">\n\
+	 <ol class=\"footnotes-list\">\n\
+	 <li id=\"fn1\" class=\"footnote-item\">\n\
+	 <p>example.com <a href=\"#fnref1\" class=\"footnote-backref\">↩︎</a></p>\n\
+	 </li>\n</ol>\n</section>\n",
+      ),
+      (
+        "mention links",
+        "[@example@example.com](https://example.com/u/example)",
+        "<p><a href=\"https://example.com/u/example\" rel=\"nofollow\" class=\"u-url mention\">@example@example.com</a></p>\n",
+      ),
+      (
+        "dont add backslash escapes in urls",
+        "[markdown link](https://en.wikipedia.org/wiki/Dragnet_(franchise))",
+        "<p><a href=\"https://en.wikipedia.org/wiki/Dragnet_(franchise)\" rel=\"nofollow\">markdown link</a></p>\n",
+      ),
+    ];
+
+    tests.iter().for_each(|&(msg, input, expected)| {
+      let result = markdown_to_html(input);
+
+      assert_eq!(
+        result, expected,
+        "Testing {}, with original input '{}'",
+        msg, input
+      );
+    });
+  }
+
+  // This replicates the logic when saving url blocklist patterns and querying them.
+  // Refer to lemmy_api_crud::site::update::update_site and
+  // lemmy_api_common::utils::get_url_blocklist().
+  fn create_url_blocklist_test_regex_set(patterns: Vec<&str>) -> LemmyResult<RegexSet> {
+    let url_blocklist = patterns.iter().map(|&s| s.to_string()).collect();
+    let valid_urls = check_urls_are_valid(&url_blocklist)?;
+    let regexes = valid_urls.iter().map(|p| format!(r"\b{}\b", escape(p)));
+    let set = RegexSet::new(regexes)?;
+    Ok(set)
+  }
+
+  #[test]
+  fn test_url_blocking() -> LemmyResult<()> {
+    let set = create_url_blocklist_test_regex_set(vec!["example.com/"])?;
+
+    assert!(
+      markdown_check_for_blocked_urls(&String::from("[](https://example.com)"), &set).is_err()
+    );
+
+    assert!(
+      markdown_check_for_blocked_urls(
+        &String::from("Go to https://example.com to get free Robux"),
+        &set
+      )
+      .is_err()
+    );
+
+    assert!(
+      markdown_check_for_blocked_urls(&String::from("[](https://example.blog)"), &set).is_ok()
+    );
+
+    assert!(markdown_check_for_blocked_urls(&String::from("example.com"), &set).is_err());
+
+    assert!(
+      markdown_check_for_blocked_urls(
+        "Odio exercitationem culpa sed sunt
+      et. Sit et similique tempora deserunt doloremque. Cupiditate iusto
+      repellat et quis qui. Cum veritatis facere quasi repellendus sunt
+      eveniet nemo sint. Cumque sit unde est. https://example.com Alias
+      repellendus at quos.",
+        &set
+      )
+      .is_err()
+    );
+
+    let set = create_url_blocklist_test_regex_set(vec!["example.com/spam.jpg"])?;
+    assert!(markdown_check_for_blocked_urls("![](https://example.com/spam.jpg)", &set).is_err());
+    assert!(markdown_check_for_blocked_urls("![](https://example.com/spam.jpg1)", &set).is_ok());
+    // TODO: the following should not be matched, scunthorpe problem.
+    assert!(
+      markdown_check_for_blocked_urls("![](https://example.com/spam.jpg.html)", &set).is_err()
+    );
+
+    let set = create_url_blocklist_test_regex_set(vec![
+      r"quo.example.com/",
+      r"foo.example.com/",
+      r"bar.example.com/",
+    ])?;
+
+    assert!(markdown_check_for_blocked_urls("https://baz.example.com", &set).is_ok());
+
+    assert!(markdown_check_for_blocked_urls("https://bar.example.com", &set).is_err());
+
+    let set = create_url_blocklist_test_regex_set(vec!["example.com/banned_page"])?;
+
+    assert!(markdown_check_for_blocked_urls("https://example.com/page", &set).is_ok());
+
+    let set = create_url_blocklist_test_regex_set(vec!["ex.mple.com/"])?;
+
+    assert!(markdown_check_for_blocked_urls("example.com", &set).is_ok());
+
+    let set = create_url_blocklist_test_regex_set(vec!["rt.com/"])?;
+
+    assert!(markdown_check_for_blocked_urls("deviantart.com", &set).is_ok());
+    assert!(markdown_check_for_blocked_urls("art.com.example.com", &set).is_ok());
+    assert!(markdown_check_for_blocked_urls("https://rt.com/abc", &set).is_err());
+    assert!(markdown_check_for_blocked_urls("go to rt.com.", &set).is_err());
+    assert!(markdown_check_for_blocked_urls("check out rt.computer", &set).is_ok());
+    // TODO: the following should not be matched, scunthorpe problem.
+    assert!(markdown_check_for_blocked_urls("rt.com.example.com", &set).is_err());
+
+    Ok(())
+  }
+
+  const URL_WITH_TRACKING: &str = "https://example.com/path/123?utm_content=buffercf3b2&utm_medium=social&user+name=random+user&id=123";
+  const URL_TRACKING_REMOVED: &str = "https://example.com/path/123?user+name=random+user&id=123";
+
+  #[test]
+  fn test_clean_url_params() -> LemmyResult<()> {
+    let url = Url::parse(URL_WITH_TRACKING)?;
+    let cleaned = clean_url(&url);
+    let expected = Url::parse(URL_TRACKING_REMOVED)?;
+    assert_eq!(expected.to_string(), cleaned.to_string());
+
+    let url = Url::parse("https://example.com/path/123")?;
+    let cleaned = clean_url(&url);
+    assert_eq!(url.to_string(), cleaned.to_string());
+
+    Ok(())
+  }
+
+  #[test]
+  fn test_clean_body() -> LemmyResult<()> {
+    let text = format!("[a link]({URL_WITH_TRACKING})");
+    let cleaned = clean_urls_in_text(&text);
+    let expected = format!("[a link]({URL_TRACKING_REMOVED})");
+    assert_eq!(expected.clone(), cleaned.clone());
+
+    let text = "[a link](https://example.com/path/123)";
+    let cleaned = clean_urls_in_text(text);
+    assert_eq!(text.to_string(), cleaned);
+
+    Ok(())
+  }
+}

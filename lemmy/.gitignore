@@ -1,0 +1,37 @@
+# local ansible configuration
+ansible/inventory
+ansible/passwords/
+
+# docker build files
+docker/lemmy_mine.hjson
+docker/dev/env_deploy.sh
+docker/volumes
+docker/*.sql.xz
+
+# ide config
+.idea
+.vscode
+
+# local build files
+target
+env_setup.sh
+query_testing/**/reports/*.json
+
+# API tests
+api_tests/node_modules
+api_tests/.yalc
+api_tests/yalc.lock
+api_tests/pict-rs
+api_tests/speed_tests.sh
+
+# pictrs data
+pictrs/
+
+# The generated typescript bindings
+bindings
+
+# database dumps
+*.sqldump
+
+# diesel
+migrations/.diesel_lock

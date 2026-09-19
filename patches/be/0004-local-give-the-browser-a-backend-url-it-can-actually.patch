@@ -1,0 +1,72 @@
+From 8519b60ba484a9a1920724d29bb8a0bbcc01f03d Mon Sep 17 00:00:00 2001
+From: dardiao <xn--6s1a@outlook.com>
+Date: Sat, 19 Sep 2026 12:00:21 +0800
+Subject: [PATCH 4/7] local: give the browser a backend url it can actually
+ reach
+
+LEMMY_UI_BACKEND is embedded into every rendered page for the *browser* to use, while
+LEMMY_UI_BACKEND_INTERNAL is what server-side rendering uses. The compose file only set the
+former, to the compose-internal `lemmy:8536`, which no browser can resolve - so every
+client-side request (login, voting, posting) failed with "Failed to fetch" while the
+server-rendered pages looked fine.
+
+Point the browser-facing url at the proxy on the same origin as the ui, keep the internal one
+on the compose network, and add LEMMY_UI_FRONTEND so share links do not point at the internal
+`lemmy-ui` hostname either. All three follow LEMMY_UI_PUBLIC_URL, so a real deployment just
+sets that to its own address.
+---
+ docker/README.md          | 12 ++++++++++++
+ docker/docker-compose.yml | 14 ++++++++++++--
+ 2 files changed, 24 insertions(+), 2 deletions(-)
+
+diff --git a/docker/README.md b/docker/README.md
+index fc29f09..71914de 100644
+--- a/docker/README.md
++++ b/docker/README.md
+@@ -38,6 +38,18 @@ docker compose down            # stop and remove containers (data is kept)
+ The web UI is then on <http://localhost:1236>, the API on
+ <http://localhost:8536/api/v3/site>, and postgres is published on `5433`.
+ 
++`lemmy-ui` needs two different backend urls, and they are not interchangeable:
++`LEMMY_UI_BACKEND_INTERNAL` is what server-side rendering uses (over the compose
++network), while `LEMMY_UI_BACKEND` is embedded into the page for the *browser*,
++which cannot resolve compose service names. The compose file points the
++browser-facing one at `localhost:1236` so that it stays on the same origin as the
++UI and goes through the proxy. When the UI is served from somewhere else, pass
++that address instead:
++
++```bash
++LEMMY_UI_PUBLIC_URL=https://niuma.club docker compose up -d
++```
++
+ ### Health checks and startup order
+ 
+ Every service defines a `healthcheck`, and `depends_on` uses
+diff --git a/docker/docker-compose.yml b/docker/docker-compose.yml
+index 13967d3..b4167c2 100644
+--- a/docker/docker-compose.yml
++++ b/docker/docker-compose.yml
+@@ -77,8 +77,18 @@ services:
+       context: ../../lemmy-ui
+       dockerfile: dev.dockerfile
+     environment:
+-      # this needs to match the hostname defined in the lemmy service
+-      - LEMMY_UI_BACKEND=lemmy:8536
++      # LEMMY_UI_BACKEND is the url the *browser* uses, so it has to be reachable from the
++      # browser - the compose-internal `lemmy:8536` cannot be resolved there, which made every
++      # client-side request fail with "Failed to fetch" (logins, votes, posting). Point it at
++      # the proxy on the same origin as the ui, then set LEMMY_UI_PUBLIC_URL when the ui is
++      # reached somewhere else, e.g.
++      #   LEMMY_UI_PUBLIC_URL=https://niuma.club docker compose up -d
++      - LEMMY_UI_BACKEND=${LEMMY_UI_PUBLIC_URL:-localhost:1236}
++      # server-side rendering talks to the backend over the compose network
++      - LEMMY_UI_BACKEND_INTERNAL=lemmy:8536
++      # used for share/copy-post links; without it the request host is the internal
++      # `lemmy-ui` hostname behind the proxy
++      - LEMMY_UI_FRONTEND=${LEMMY_UI_PUBLIC_URL:-localhost:1236}
+       # set the outside hostname here
+       - LEMMY_UI_HTTPS=false
+       - LEMMY_UI_ERUDA=true
+-- 
+2.54.0
+

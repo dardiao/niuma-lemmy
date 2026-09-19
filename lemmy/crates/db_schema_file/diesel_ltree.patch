@@ -1,0 +1,21 @@
+diff --git a/crates/db_schema_file/src/schema.rs b/crates/db_schema_file/src/schema.rs
+index 4e6418b95..d38a412e3 100644
+--- a/crates/db_schema_file/src/schema.rs
++++ b/crates/db_schema_file/src/schema.rs
+@@ -72,7 +72,7 @@ pub mod sql_types {
+ 
+ diesel::table! {
+     use diesel::sql_types::*;
+-    use super::sql_types::Ltree;
++    use diesel_ltree::sql_types::Ltree;
+ 
+     comment (id) {
+         id -> Int4,
+@@ -1079,5 +1079,7 @@ diesel::allow_tables_to_appear_in_same_query!(
+   report_combined,
+   site,
+   site_language,
++  person_actions,
++  image_details,
+ );
+ diesel::allow_tables_to_appear_in_same_query!(custom_emoji, custom_emoji_keyword,);

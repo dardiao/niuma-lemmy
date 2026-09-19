@@ -1,0 +1,59 @@
+From 73a13078e9f0dc06c9172c4e4dfa34151aa2ec9e Mon Sep 17 00:00:00 2001
+From: dardiao <xn--6s1a@outlook.com>
+Date: Sat, 19 Sep 2026 10:37:34 +0800
+Subject: [PATCH 1/7] build(docker): pin the builder toolchain so image builds
+ work offline
+
+rust-toolchain.toml declares a rustup *channel* ("1.95"), and rustup treats a
+channel as something to sync, so every image build round-trips to
+static.rust-lang.org and fails outright on a restricted network.
+
+Use the toolchain that is already baked into the cargo-chef builder image
+instead. Naming it without a host triple lets rustup resolve the triple for
+whatever architecture is building, so this works on amd64 as well as arm64,
+and a guard step fails the build with a clear message if the toolchain is
+missing rather than silently falling back to a download.
+---
+ docker/Dockerfile | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/docker/Dockerfile b/docker/Dockerfile
+index 989b05c..db40ca7 100644
+--- a/docker/Dockerfile
++++ b/docker/Dockerfile
+@@ -12,6 +12,22 @@ ARG GID=1000
+ 
+ # Chef
+ FROM ${BUILDER_IMAGE} AS chef
++
++# `rust-toolchain.toml` pins `channel = "1.95"`, and rustup treats a channel as something to
++# sync, so every build round-trips to static.rust-lang.org and fails outright on a restricted
++# network. Point rustup at the toolchain that is already baked into the builder image instead.
++# The image exports RUST_VERSION (the full `1.95.0`, not the `1.95` of the image tag), so the
++# value is inherited rather than repeated here. Naming a toolchain without a host triple makes
++# rustup resolve the triple for whatever architecture is building, so this is not arm64-only.
++ENV RUSTUP_TOOLCHAIN=${RUST_VERSION}
++
++# Fail loudly and offline if that toolchain is missing, instead of silently falling back to
++# downloading the channel declared in rust-toolchain.toml. rustup resolves the bare version
++# against the host triple, so match on the version prefix.
++RUN set -eux; \
++  rustup toolchain list | cut -d' ' -f1 | grep -q "^${RUSTUP_TOOLCHAIN}-"; \
++  rustc --version
++
+ WORKDIR /lemmy
+ 
+ # Planner
+@@ -55,7 +71,8 @@ FROM ${RUNNER_IMAGE} AS runner
+ # Add system packages that are needed: federation needs CA certificates, curl can be used for healthchecks
+ RUN apt update && apt install -y libssl-dev libpq-dev ca-certificates curl git
+ 
+-COPY --from=builder --chmod=0755 /lemmy/lemmy_server /usr/local/bin
++COPY --from=builder /lemmy/lemmy_server /usr/local/bin/lemmy_server
++RUN chmod 0755 /usr/local/bin/lemmy_server
+ 
+ LABEL org.opencontainers.image.authors="The Lemmy Authors"
+ LABEL org.opencontainers.image.source="https://github.com/LemmyNet/lemmy"
+-- 
+2.54.0
+

@@ -1,0 +1,6 @@
+allowBuilds:
+  '@parcel/watcher': true
+  inferno: true
+  sharp: true
+minimumReleaseAgeExclude:
+  - lemmy-js-client

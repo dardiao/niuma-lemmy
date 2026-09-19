@@ -1,0 +1,66 @@
+# 生产环境 override，和开发用的 docker-compose.yml 叠加使用：
+#
+#   cd lemmy/docker
+#   docker compose --env-file ../../lemmy-deploy/.env \
+#     -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# 与开发栈的区别：
+#   - proxy 从 nginx(1236/8536) 换成 caddy(80/443)，自动申请和续期证书
+#   - 内部端口不再对外发布（开发文件把 postgres 的 5433 映射出去了，公网上不能留）
+#   - 口令、域名、安全联系人全部来自 .env；lemmy 配置用 lemmy-deploy 生成的生产版
+#
+# 需要 compose >= 2.24（用到 !override / !reset 合并标签），上服务器第一件事就是
+# `docker compose version` 确认一下。
+
+services:
+  proxy:
+    image: caddy:2-alpine
+    ports: !override
+      - "80:80"
+      - "443:443"
+    volumes: !override
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      LEMMY_DOMAIN: ${LEMMY_DOMAIN:?请在 .env 里设置 LEMMY_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?请在 .env 里设置 ACME_EMAIL}
+    healthcheck: !override
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  lemmy:
+    environment:
+      RUST_LOG: warn,extism=info,lemmy_server=info,lemmy_api=info,lemmy_apub=info
+      # 生产默认开启对外联邦；设成 true 就变成只读的本地实例
+      LEMMY_DISABLE_ACTIVITY_SENDING: ${LEMMY_DISABLE_ACTIVITY_SENDING:-false}
+    volumes: !override
+      - ../../lemmy-deploy/lemmy.prod.hjson:/config/config.hjson:Z
+      - ./plugins:/plugins:Z
+
+  lemmy-ui:
+    environment:
+      # 浏览器用正式域名访问（同源，走 caddy 转发），服务端渲染走 compose 网络
+      LEMMY_UI_BACKEND: ${LEMMY_DOMAIN}
+      LEMMY_UI_BACKEND_INTERNAL: lemmy:8536
+      LEMMY_UI_FRONTEND: ${LEMMY_DOMAIN}
+      LEMMY_UI_HTTPS: "true"
+      LEMMY_UI_SECURITY_CONTACT: ${LEMMY_UI_SECURITY_CONTACT:-}
+      LEMMY_UI_ERUDA: "false"
+
+  pictrs:
+    environment:
+      PICTRS__SERVER__API_KEY: ${PICTRS_API_KEY:?请在 .env 里设置 PICTRS_API_KEY}
+
+  postgres:
+    # 生产不把数据库端口发布到宿主机
+    ports: !reset []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 里设置 POSTGRES_PASSWORD}
+
+volumes:
+  caddy_data:
+  caddy_config:

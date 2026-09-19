@@ -1,0 +1,135 @@
+From 225ab04f488ce88b23fa353a15090cab52d75618 Mon Sep 17 00:00:00 2001
+From: dardiao <xn--6s1a@outlook.com>
+Date: Sat, 19 Sep 2026 22:38:52 +0800
+Subject: [PATCH 08/14] local: remove identifying traces from generated files
+ and pages
+
+- webpack banner: keep the copyright line, the AGPL notice and a modification notice (all of
+  which the licence asks for) but drop the link back to the upstream repository and the
+  "Created by" line
+- <meta name="Description"> said "Lemmy"; it now carries the site name
+- the root div's class was "lemmy-site", a hook other tools can use to detect the software
+- the API responses advertised "X-Powered-By: Express"
+- security.txt pointed at the upstream security advisory page; it now uses
+  LEMMY_UI_SECURITY_CONTACT and stays silent when that is unset
+- dropped the four url constants nothing referenced any more (repoUrl, docsUrl, helpGuideUrl,
+  sortingHelpUrl) so their strings stop shipping in the bundle
+---
+ src/server/handlers/security-handler.ts | 12 ++++++++++--
+ src/server/index.tsx                    |  2 ++
+ src/server/utils/create-ssr-html.tsx    |  2 +-
+ src/shared/components/app/app.tsx       |  2 +-
+ src/shared/utils/config.ts              |  4 ----
+ webpack.config.js                       |  8 ++++++--
+ 6 files changed, 20 insertions(+), 10 deletions(-)
+
+diff --git a/src/server/handlers/security-handler.ts b/src/server/handlers/security-handler.ts
+index 8687ddc1..4237d647 100644
+--- a/src/server/handlers/security-handler.ts
++++ b/src/server/handlers/security-handler.ts
+@@ -2,6 +2,10 @@ import type { Response } from "express";
+ import { BUILD_DATE_ISO8601 } from "../../shared/build-date";
+ import { parseISO } from "date-fns";
+ 
++// LOCAL: upstream pointed this at its own security advisory page. Send reporters to the
++// operator instead: set LEMMY_UI_SECURITY_CONTACT (a uri, e.g. mailto:you@example.org) in the
++// deployment. With nothing configured only the Expires field is sent, so no report ever ends
++// up at the upstream project by accident.
+ export default ({ res }: { res: Response }) => {
+   const buildDatePlusYear = parseISO(BUILD_DATE_ISO8601);
+ 
+@@ -12,6 +16,10 @@ export default ({ res }: { res: Response }) => {
+ 
+   res.setHeader("content-type", "text/plain; charset=utf-8");
+ 
+-  res.send(`Contact: https://github.com/LemmyNet/lemmy-ui/security/advisories/new
+-Expires: ${yearFromNow}`);
++  const contact = process.env.LEMMY_UI_SECURITY_CONTACT;
++  res.send(
++    contact
++      ? `Contact: ${contact}\nExpires: ${yearFromNow}`
++      : `Expires: ${yearFromNow}`,
++  );
+ };
+diff --git a/src/server/index.tsx b/src/server/index.tsx
+index ac6f314c..7d20b053 100644
+--- a/src/server/index.tsx
++++ b/src/server/index.tsx
+@@ -29,6 +29,8 @@ import {
+ } from "./handlers/feed-handler";
+ 
+ const server = express();
++// LOCAL: don't advertise the server framework in every response.
++server.disable("x-powered-by");
+ // Log requests, skipping static asset paths to avoid log noise
+ const logFormat =
+   process.env["NODE_ENV"] === "development" ? "dev" : "combined";
+diff --git a/src/server/utils/create-ssr-html.tsx b/src/server/utils/create-ssr-html.tsx
+index e4cd9cfa..52ecfc71 100644
+--- a/src/server/utils/create-ssr-html.tsx
++++ b/src/server/utils/create-ssr-html.tsx
+@@ -139,7 +139,7 @@ export async function createSsrHtml(
+     </style>
+ 
+     <!-- Required meta tags -->
+-    <meta name="Description" content="Lemmy">
++    <meta name="Description" content="${(site?.site_view.site.name ?? "").replace(/"/g, "&quot;")}">
+     <meta charset="utf-8">
+     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+     <link
+diff --git a/src/shared/components/app/app.tsx b/src/shared/components/app/app.tsx
+index 6d543e02..3993f791 100644
+--- a/src/shared/components/app/app.tsx
++++ b/src/shared/components/app/app.tsx
+@@ -140,7 +140,7 @@ export default class App extends Component<AppProps, object> {
+           )}
+           <div
+             id="app"
+-            className="lemmy-site"
++            className="site-root"
+             ref={this.rootRef}
+             data-adult-consent={this.isoData.showAdultConsentModal || null}
+           >
+diff --git a/src/shared/utils/config.ts b/src/shared/utils/config.ts
+index 90386623..6b5bcc19 100644
+--- a/src/shared/utils/config.ts
++++ b/src/shared/utils/config.ts
+@@ -3,14 +3,10 @@ import { getStaticDir } from "@utils/env";
+ export const favIconUrl = `${getStaticDir()}/assets/icons/favicon.svg`;
+ export const favIconPngUrl = `${getStaticDir()}/assets/icons/apple-touch-icon.png`;
+ 
+-export const repoUrl = "https://github.com/LemmyNet";
+ export const joinLemmyUrl = "https://join-lemmy.org";
+ export const donateLemmyUrl = `${joinLemmyUrl}/donate`;
+-export const docsUrl = `${joinLemmyUrl}/docs/en/index.html`;
+-export const helpGuideUrl = `${joinLemmyUrl}/docs/en/users/01-getting-started.html`; // TODO find a way to redirect to the non-en folder
+ export const markdownHelpUrl = `${joinLemmyUrl}/docs/en/users/02-media.html`;
+ export const torrentHelpUrl = `${markdownHelpUrl}#torrents`;
+-export const sortingHelpUrl = `${joinLemmyUrl}/docs/en/users/03-votes-and-ranking.html`;
+ export const archiveTodayUrl = "https://archive.today";
+ export const ghostArchiveUrl = "https://ghostarchive.org";
+ export const webArchiveUrl = "https://web.archive.org";
+diff --git a/webpack.config.js b/webpack.config.js
+index 419f7cd3..7b58458c 100644
+--- a/webpack.config.js
++++ b/webpack.config.js
+@@ -9,10 +9,14 @@ const {
+   lazySyntaxHighlighters,
+ } = require("./src/shared/build-config");
+ 
++// LOCAL: the upstream banner advertised the upstream repository and author on every generated
++// file. The licence notice and the copyright line stay - AGPL requires them, and the git
++// history of this checkout still records where the code came from - but the pointer back to
++// the upstream project is replaced by the modification notice AGPL also asks for.
+ const banner = `
+   hash:[contentHash], chunkhash:[chunkhash], name:[name], filebase:[base], query:[query], file:[file]
+-  Source code: https://github.com/LemmyNet/lemmy-ui
+-  Created by dessalines
++  Copyright (C) 2019-2026 Dessalines and contributors
++  Modified for this site on 2026-09-19 - see LICENSE in the source distribution
+   @license magnet:?xt=urn:btih:0b31508aeb0634b347b8270c7bee4d411b5d4109&dn=agpl-3.0.txt AGPL v3.0
+   `;
+ 
+-- 
+2.54.0
+

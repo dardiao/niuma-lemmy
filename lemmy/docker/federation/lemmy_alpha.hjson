@@ -1,0 +1,16 @@
+{
+  hostname: lemmy-alpha:8541
+  port: 8541
+  tls_enabled: false
+  setup: {
+    admin_username: lemmy_alpha
+    admin_password: lemmylemmy
+    site_name: lemmy-alpha
+  }
+  database: {
+    connection: "postgres://lemmy:password@postgres_alpha:5432/lemmy"
+  }
+  pictrs: {
+    api_key: "my-pictrs-key"
+  }
+}
