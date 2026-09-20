@@ -1,7 +1,7 @@
 From 689ecabaea7beef190e26da80f8481d046dce871 Mon Sep 17 00:00:00 2001
 From: dardiao <xn--6s1a@outlook.com>
 Date: Sat, 19 Sep 2026 11:38:23 +0800
-Subject: [PATCH 02/14] local: de-brand the navbar, sidebar and footer
+Subject: [PATCH 02/15] local: de-brand the navbar, sidebar and footer
 
 - navbar: the heart no longer links to the Lemmy donation page; clicking it now offers to
   bookmark this site (share sheet where the platform has one, otherwise the URL is copied

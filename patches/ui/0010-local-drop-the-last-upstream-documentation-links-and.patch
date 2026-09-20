@@ -1,7 +1,7 @@
 From f6bfb29acd3099f8020c7db75ffdfcdf22a7b4f5 Mon Sep 17 00:00:00 2001
 From: dardiao <xn--6s1a@outlook.com>
 Date: Sat, 19 Sep 2026 23:05:54 +0800
-Subject: [PATCH 10/14] local: drop the last upstream documentation links and
+Subject: [PATCH 10/15] local: drop the last upstream documentation links and
  the dead donation dialog
 
 - the composer's formatting-help button and the magnet-link "torrent help" alert both linked

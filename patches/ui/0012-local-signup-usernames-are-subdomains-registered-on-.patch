@@ -1,7 +1,7 @@
 From 6263e720808abe45efd8bc4bc4700cfcdf803cac Mon Sep 17 00:00:00 2001
 From: dardiao <xn--6s1a@outlook.com>
 Date: Sun, 20 Sep 2026 01:41:29 +0800
-Subject: [PATCH 12/14] local: signup usernames are subdomains registered on
+Subject: [PATCH 12/15] local: signup usernames are subdomains registered on
  the dns platform
 
 The username field now shows a fixed, grey `.niuma.club` suffix and holds only the prefix;

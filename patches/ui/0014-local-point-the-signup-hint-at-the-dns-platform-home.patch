@@ -1,7 +1,7 @@
 From 50178232d6fcbc442e5b767a68d024685d852529 Mon Sep 17 00:00:00 2001
 From: dardiao <xn--6s1a@outlook.com>
 Date: Sun, 20 Sep 2026 01:57:07 +0800
-Subject: [PATCH 14/14] local: point the signup hint at the dns platform home
+Subject: [PATCH 14/15] local: point the signup hint at the dns platform home
  page
 
 The hint linked to /domains/, which is only useful once you are signed in there; the operator

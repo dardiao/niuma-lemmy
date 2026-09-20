@@ -1016,229 +1016,248 @@ export class Settings extends Component<SettingsRouteProps, SettingsState> {
             keywords={this.state.saveUserSettingsForm.blocking_keywords ?? []}
             onUpdate={keywords => handleBlockingKeywordsUpdate(this, keywords)}
           />
-          <div className="row mb-3">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"show_nsfw"}
-                isChecked={this.state.saveUserSettingsForm.show_nsfw ?? false}
-                onCheck={val => handleShowNsfwChange(this, val)}
-              />
-            </div>
-          </div>
-          <div className="row mb-3">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"blur_nsfw"}
-                isChecked={
-                  (this.state.saveUserSettingsForm.blur_nsfw ?? false) &&
-                  (this.state.saveUserSettingsForm.show_nsfw ?? false)
-                }
-                onCheck={val => handleBlurNsfwChange(this, val)}
-                disabled={!this.state.saveUserSettingsForm.show_nsfw}
-              />
-            </div>
-          </div>
-          <div className="row mb-3 align-items-center">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"show_scores"}
-                isChecked={this.state.saveUserSettingsForm.show_score ?? false}
-                onCheck={val => handleShowScoresChange(this, val, myUserInfo)}
-              />
-            </div>
-          </div>
-          <div className="row mb-3">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"show_upvotes"}
-                isChecked={
-                  this.state.saveUserSettingsForm.show_upvotes ?? false
-                }
-                onCheck={val => handleShowUpvotesChange(this, val, myUserInfo)}
-              />
-            </div>
-          </div>
-          {enableDownvotes(siteRes) && (
-            <div className="mb-3 row align-items-center">
-              <label className="col-sm-3 col-form-label">
-                {I18NextService.i18n.t("show_downvotes")}
-              </label>
-              <div className="col-sm-9">
-                <VoteShowDropdown
-                  currentOption={
-                    this.state.saveUserSettingsForm.show_downvotes ?? "show"
-                  }
-                  onSelect={val => handleShowDownvotesChange(this, val)}
+          {/* LOCAL: upstream renders each of these preferences as its own row, which reads as
+              a sparse list. The wrapper puts them in an aligned grid instead. */}
+          <div className="settings-toggles">
+            <div className="row mb-3">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"show_nsfw"}
+                  isChecked={this.state.saveUserSettingsForm.show_nsfw ?? false}
+                  onCheck={val => handleShowNsfwChange(this, val)}
                 />
               </div>
             </div>
-          )}
-          <div className="row mb-3">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"show_upvote_percentage"}
-                isChecked={
-                  this.state.saveUserSettingsForm.show_upvote_percentage ??
-                  false
-                }
-                onCheck={val =>
-                  handleShowUpvotePercentageChange(this, val, myUserInfo)
-                }
-              />
+            <div className="row mb-3">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"blur_nsfw"}
+                  isChecked={
+                    (this.state.saveUserSettingsForm.blur_nsfw ?? false) &&
+                    (this.state.saveUserSettingsForm.show_nsfw ?? false)
+                  }
+                  onCheck={val => handleBlurNsfwChange(this, val)}
+                  disabled={!this.state.saveUserSettingsForm.show_nsfw}
+                />
+              </div>
             </div>
-          </div>
-          <div className="row mb-3">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"show_user_vote_totals"}
-                isChecked={
-                  this.state.saveUserSettingsForm.show_person_votes ?? false
-                }
-                onCheck={val => handleShowPersonVotesChange(this, val)}
-              />
+            <div className="row mb-3 align-items-center">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"show_scores"}
+                  isChecked={
+                    this.state.saveUserSettingsForm.show_score ?? false
+                  }
+                  onCheck={val => handleShowScoresChange(this, val, myUserInfo)}
+                />
+              </div>
             </div>
-          </div>
-          <div className="row mb-3">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"show_avatars"}
-                isChecked={
-                  this.state.saveUserSettingsForm.show_avatars ?? false
-                }
-                onCheck={val => handleShowAvatarsChange(this, val, myUserInfo)}
-              />
+            <div className="row mb-3">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"show_upvotes"}
+                  isChecked={
+                    this.state.saveUserSettingsForm.show_upvotes ?? false
+                  }
+                  onCheck={val =>
+                    handleShowUpvotesChange(this, val, myUserInfo)
+                  }
+                />
+              </div>
             </div>
-          </div>
-          <div className="row mb-3">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"show_media"}
-                isChecked={this.state.saveUserSettingsForm.show_media ?? false}
-                onCheck={val => handleShowMediaChange(this, val, myUserInfo)}
-              />
+            {enableDownvotes(siteRes) && (
+              <div className="mb-3 row align-items-center settings-toggle-wide">
+                <label className="col-sm-3 col-form-label">
+                  {I18NextService.i18n.t("show_downvotes")}
+                </label>
+                <div className="col-sm-9">
+                  <VoteShowDropdown
+                    currentOption={
+                      this.state.saveUserSettingsForm.show_downvotes ?? "show"
+                    }
+                    onSelect={val => handleShowDownvotesChange(this, val)}
+                  />
+                </div>
+              </div>
+            )}
+            <div className="row mb-3">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"show_upvote_percentage"}
+                  isChecked={
+                    this.state.saveUserSettingsForm.show_upvote_percentage ??
+                    false
+                  }
+                  onCheck={val =>
+                    handleShowUpvotePercentageChange(this, val, myUserInfo)
+                  }
+                />
+              </div>
             </div>
-          </div>
-          <div className="row mb-3">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"show_animated_images"}
-                isChecked={
-                  this.state.saveUserSettingsForm.animated_images_enabled ??
-                  false
-                }
-                onCheck={val =>
-                  handleEnableAnimatedImagesChange(this, val, myUserInfo)
-                }
-              />
+            <div className="row mb-3">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"show_user_vote_totals"}
+                  isChecked={
+                    this.state.saveUserSettingsForm.show_person_votes ?? false
+                  }
+                  onCheck={val => handleShowPersonVotesChange(this, val)}
+                />
+              </div>
             </div>
-          </div>
-          <div className="row mb-3">
-            <div
-              className="col"
-              data-tippy-content={I18NextService.i18n.t(
-                "hide_memes_description",
-              )}
-            >
-              <FilterChipCheckbox
-                option={"hide_memes"}
-                isChecked={
-                  this.state.saveUserSettingsForm.hide_posts_with_media ?? false
-                }
-                onCheck={val =>
-                  handleHidePostsWithMediaChange(this, val, myUserInfo)
-                }
-              />
+            <div className="row mb-3">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"show_avatars"}
+                  isChecked={
+                    this.state.saveUserSettingsForm.show_avatars ?? false
+                  }
+                  onCheck={val =>
+                    handleShowAvatarsChange(this, val, myUserInfo)
+                  }
+                />
+              </div>
             </div>
-          </div>
-          <div className="row mb-3">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"bot_account"}
-                isChecked={this.state.saveUserSettingsForm.bot_account ?? false}
-                onCheck={val => handleBotAccountChange(this, val)}
-              />
+            <div className="row mb-3">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"show_media"}
+                  isChecked={
+                    this.state.saveUserSettingsForm.show_media ?? false
+                  }
+                  onCheck={val => handleShowMediaChange(this, val, myUserInfo)}
+                />
+              </div>
             </div>
-          </div>
-          <div className="row mb-3">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"show_bot_accounts"}
-                isChecked={
-                  this.state.saveUserSettingsForm.show_bot_accounts ?? false
-                }
-                onCheck={val => handleShowBotAccountsChange(this, val)}
-              />
+            <div className="row mb-3">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"show_animated_images"}
+                  isChecked={
+                    this.state.saveUserSettingsForm.animated_images_enabled ??
+                    false
+                  }
+                  onCheck={val =>
+                    handleEnableAnimatedImagesChange(this, val, myUserInfo)
+                  }
+                />
+              </div>
             </div>
-          </div>
-          <div className="row mb-3">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"collapse_bot_comments"}
-                isChecked={
-                  this.state.saveUserSettingsForm.collapse_bot_comments ?? false
-                }
-                onCheck={val => handleCollapseBotCommentsChange(this, val)}
-              />
+            <div className="row mb-3">
+              <div
+                className="col"
+                data-tippy-content={I18NextService.i18n.t(
+                  "hide_memes_description",
+                )}
+              >
+                <FilterChipCheckbox
+                  option={"hide_memes"}
+                  isChecked={
+                    this.state.saveUserSettingsForm.hide_posts_with_media ??
+                    false
+                  }
+                  onCheck={val =>
+                    handleHidePostsWithMediaChange(this, val, myUserInfo)
+                  }
+                />
+              </div>
             </div>
-          </div>
-          <div className="row mb-3">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"show_read_posts"}
-                isChecked={
-                  this.state.saveUserSettingsForm.show_read_posts ?? false
-                }
-                onCheck={val => handleShowReadPostsChange(this, val)}
-              />
+            <div className="row mb-3">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"bot_account"}
+                  isChecked={
+                    this.state.saveUserSettingsForm.bot_account ?? false
+                  }
+                  onCheck={val => handleBotAccountChange(this, val)}
+                />
+              </div>
             </div>
-          </div>
-          <div className="row mb-3">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"send_notifications_to_email"}
-                isChecked={
-                  this.state.saveUserSettingsForm.send_notifications_to_email ??
-                  false
-                }
-                onCheck={val => handleSendNotificationsToEmailChange(this, val)}
-              />
+            <div className="row mb-3">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"show_bot_accounts"}
+                  isChecked={
+                    this.state.saveUserSettingsForm.show_bot_accounts ?? false
+                  }
+                  onCheck={val => handleShowBotAccountsChange(this, val)}
+                />
+              </div>
             </div>
-          </div>
-          <div className="row mb-3">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"open_links_in_new_tab"}
-                isChecked={
-                  this.state.saveUserSettingsForm.open_links_in_new_tab ?? false
-                }
-                onCheck={val => handleOpenLinksInNewTabChange(this, val)}
-              />
+            <div className="row mb-3">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"collapse_bot_comments"}
+                  isChecked={
+                    this.state.saveUserSettingsForm.collapse_bot_comments ??
+                    false
+                  }
+                  onCheck={val => handleCollapseBotCommentsChange(this, val)}
+                />
+              </div>
             </div>
-          </div>
-          <div className="row mb-3">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"enable_private_messages"}
-                isChecked={
-                  this.state.saveUserSettingsForm.private_messages_enabled ??
-                  false
-                }
-                onCheck={val => handleEnablePrivateMessages(this, val)}
-              />
+            <div className="row mb-3">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"show_read_posts"}
+                  isChecked={
+                    this.state.saveUserSettingsForm.show_read_posts ?? false
+                  }
+                  onCheck={val => handleShowReadPostsChange(this, val)}
+                />
+              </div>
             </div>
-          </div>
-          <div className="row mb-3">
-            <div className="col">
-              <FilterChipCheckbox
-                option={"auto_mark_fetched_posts_as_read"}
-                isChecked={
-                  this.state.saveUserSettingsForm
-                    .auto_mark_fetched_posts_as_read ?? false
-                }
-                onCheck={val =>
-                  handleAutoMarkFetchedPostsAsReadChange(this, val)
-                }
-              />
+            <div className="row mb-3">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"send_notifications_to_email"}
+                  isChecked={
+                    this.state.saveUserSettingsForm
+                      .send_notifications_to_email ?? false
+                  }
+                  onCheck={val =>
+                    handleSendNotificationsToEmailChange(this, val)
+                  }
+                />
+              </div>
+            </div>
+            <div className="row mb-3">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"open_links_in_new_tab"}
+                  isChecked={
+                    this.state.saveUserSettingsForm.open_links_in_new_tab ??
+                    false
+                  }
+                  onCheck={val => handleOpenLinksInNewTabChange(this, val)}
+                />
+              </div>
+            </div>
+            <div className="row mb-3">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"enable_private_messages"}
+                  isChecked={
+                    this.state.saveUserSettingsForm.private_messages_enabled ??
+                    false
+                  }
+                  onCheck={val => handleEnablePrivateMessages(this, val)}
+                />
+              </div>
+            </div>
+            <div className="row mb-3">
+              <div className="col">
+                <FilterChipCheckbox
+                  option={"auto_mark_fetched_posts_as_read"}
+                  isChecked={
+                    this.state.saveUserSettingsForm
+                      .auto_mark_fetched_posts_as_read ?? false
+                  }
+                  onCheck={val =>
+                    handleAutoMarkFetchedPostsAsReadChange(this, val)
+                  }
+                />
+              </div>
             </div>
           </div>
           <div className="input-group mb-3">

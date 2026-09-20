@@ -1,7 +1,7 @@
 From e66ed057d85dbfcda736bef92448f2147fa59718 Mon Sep 17 00:00:00 2001
 From: dardiao <xn--6s1a@outlook.com>
 Date: Sat, 19 Sep 2026 22:29:33 +0800
-Subject: [PATCH 07/14] local: show the ui/be version badges to admins only
+Subject: [PATCH 07/15] local: show the ui/be version badges to admins only
 
 The footer printed "UI: <ui version>  BE: <backend version>" to everyone. That hint is useful
 while debugging a local stack, but on a public site it is developer noise - and it also

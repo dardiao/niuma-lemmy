@@ -1,7 +1,7 @@
 From 9a33ca60180e3815d91ab5dca19a38c14458a2ff Mon Sep 17 00:00:00 2001
 From: dardiao <xn--6s1a@outlook.com>
 Date: Sat, 19 Sep 2026 10:37:29 +0800
-Subject: [PATCH 01/14] fix(docker): include pnpm-workspace.yaml in the UI
+Subject: [PATCH 01/15] fix(docker): include pnpm-workspace.yaml in the UI
  build context
 
 `pnpm i` reads `allowBuilds` from pnpm-workspace.yaml, so leaving that file

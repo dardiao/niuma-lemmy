@@ -1,7 +1,7 @@
 From 0d5417268ed5a86791b7fb2f8aec20556d7e62fe Mon Sep 17 00:00:00 2001
 From: dardiao <xn--6s1a@outlook.com>
 Date: Sat, 19 Sep 2026 11:46:24 +0800
-Subject: [PATCH 03/14] local: copy the site link from the navbar heart button
+Subject: [PATCH 03/15] local: copy the site link from the navbar heart button
 
 Clicking the heart used to open the Lemmy donation page. It now copies a link to this site
 and flashes a check mark for a moment. navigator.clipboard only exists in a secure context,

@@ -1,7 +1,7 @@
 From f51fb77d78bce4a3549c021c4a68119d28f260af Mon Sep 17 00:00:00 2001
 From: dardiao <xn--6s1a@outlook.com>
 Date: Sat, 19 Sep 2026 23:00:53 +0800
-Subject: [PATCH 09/14] local: replace the bundled lemmy icon with the site's
+Subject: [PATCH 09/15] local: replace the bundled lemmy icon with the site's
  own mark
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

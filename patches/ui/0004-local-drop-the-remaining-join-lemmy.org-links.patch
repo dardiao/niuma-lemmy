@@ -1,7 +1,7 @@
 From 79cd6f7816d844914e26fed862203f384bd3c304 Mon Sep 17 00:00:00 2001
 From: dardiao <xn--6s1a@outlook.com>
 Date: Sat, 19 Sep 2026 11:52:35 +0800
-Subject: [PATCH 04/14] local: drop the remaining join-lemmy.org links
+Subject: [PATCH 04/15] local: drop the remaining join-lemmy.org links
 
 - sort dropdowns: the "?" next to each sort control linked to the official sorting
   documentation; removed

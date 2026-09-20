@@ -1,0 +1,62 @@
+From 8ba7c35f30643e4424c30915f6cbad659b2c8172 Mon Sep 17 00:00:00 2001
+From: dardiao <xn--6s1a@outlook.com>
+Date: Sun, 20 Sep 2026 03:16:44 +0800
+Subject: [PATCH 15/15] local: link the source of this modified version from
+ the footer
+
+AGPL section 13 requires that people using the instance over the network can get the
+corresponding source of this modified version. The footer now links to the public repository
+that holds it (same info as the LICENSE/modification notes in the source distribution).
+---
+ src/shared/components/app/footer.tsx | 13 ++++++++++++-
+ src/shared/utils/config.ts           |  3 +++
+ 2 files changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/src/shared/components/app/footer.tsx b/src/shared/components/app/footer.tsx
+index a40889ae..0a7ced75 100644
+--- a/src/shared/components/app/footer.tsx
++++ b/src/shared/components/app/footer.tsx
+@@ -1,7 +1,7 @@
+ import { Component } from "inferno";
+ import { NavLink } from "inferno-router";
+ import { GetSiteResponse } from "lemmy-js-client";
+-import { instanceLabel } from "@utils/config";
++import { instanceLabel, sourceCodeLabel, sourceCodeUrl } from "@utils/config";
+ import { setIsoData } from "@utils/app";
+ import { amAdmin } from "@utils/roles";
+ import { I18NextService } from "../../services";
+@@ -61,6 +61,17 @@ export class Footer extends Component<FooterProps, never> {
+             <li className="nav-item">
+               <span className="nav-link">{instanceLabel}</span>
+             </li>
++            {/* LOCAL: AGPL requires offering the source of this modified version. */}
++            <li className="nav-item">
++              <a
++                className="nav-link"
++                href={sourceCodeUrl}
++                target="_blank"
++                rel="noopener noreferrer"
++              >
++                {sourceCodeLabel}
++              </a>
++            </li>
+           </ul>
+         </div>
+       </footer>
+diff --git a/src/shared/utils/config.ts b/src/shared/utils/config.ts
+index 88802a1b..dd0fa448 100644
+--- a/src/shared/utils/config.ts
++++ b/src/shared/utils/config.ts
+@@ -14,6 +14,9 @@ export const matrixUrl = "https://matrix.org/try-matrix/";
+ export const instanceLabel = "niuma.club";
+ export const copyLinkLabel = "复制链接";
+ export const copiedLabel = "已复制";
++// AGPL 第 13 条要求向使用者提供本修改版的源码，页脚链接指向公开仓库。
++export const sourceCodeUrl = "https://github.com/dardiao/niuma-lemmy";
++export const sourceCodeLabel = "源代码";
+ // Signup is tied to the operator's subdomain platform: a username is the prefix of a
+ // registered `<prefix>.niuma.club`, verified through the proxy in the ui server.
+ export const signupDomainSuffix = "niuma.club";
+-- 
+2.54.0
+

@@ -1,7 +1,7 @@
 From 225ab04f488ce88b23fa353a15090cab52d75618 Mon Sep 17 00:00:00 2001
 From: dardiao <xn--6s1a@outlook.com>
 Date: Sat, 19 Sep 2026 22:38:52 +0800
-Subject: [PATCH 08/14] local: remove identifying traces from generated files
+Subject: [PATCH 08/15] local: remove identifying traces from generated files
  and pages
 
 - webpack banner: keep the copyright line, the AGPL notice and a modification notice (all of

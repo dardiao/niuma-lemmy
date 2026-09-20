@@ -1,7 +1,7 @@
 From ddc96456017c05e8ec56f93b99e7299d6c132cf2 Mon Sep 17 00:00:00 2001
 From: dardiao <xn--6s1a@outlook.com>
 Date: Sun, 20 Sep 2026 01:54:07 +0800
-Subject: [PATCH 13/14] local: link the signup hint to the domain registration
+Subject: [PATCH 13/15] local: link the signup hint to the domain registration
  page
 
 When the subdomain is not registered yet, the hint now makes "HapDNS" a link to the

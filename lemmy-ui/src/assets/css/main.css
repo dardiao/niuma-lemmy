@@ -576,3 +576,31 @@ em-emoji-picker {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+
+/* LOCAL: the settings page renders every preference as a chip button, one per row. Lay them
+   out as an aligned grid so the block reads like a settings list instead of a sparse column.
+   Scoped to the wrapper above, the same component keeps its inline look elsewhere. */
+.settings-toggles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.settings-toggles > .row {
+  margin-bottom: 0;
+}
+
+/* A couple of rows inside that block are not chips (a label plus a dropdown); let them take
+   the full width instead of squeezing into one grid cell. */
+.settings-toggles > .settings-toggle-wide {
+  grid-column: 1 / -1;
+}
+
+.settings-toggles .btn-check + label {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding-block: 0.4rem;
+  text-align: start;
+}

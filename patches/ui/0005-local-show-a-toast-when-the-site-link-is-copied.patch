@@ -1,7 +1,7 @@
 From 504127b46f6c2e0740afe986431671c673045cc8 Mon Sep 17 00:00:00 2001
 From: dardiao <xn--6s1a@outlook.com>
 Date: Sat, 19 Sep 2026 11:54:41 +0800
-Subject: [PATCH 05/14] local: show a toast when the site link is copied
+Subject: [PATCH 05/15] local: show a toast when the site link is copied
 
 ---
  src/shared/components/app/navbar.tsx | 4 +++-
